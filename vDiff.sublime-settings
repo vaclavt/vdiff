@@ -1,0 +1,15 @@
+{
+    // number of commits listed by "vDiff: Recent Commits"
+    "commits_count": 30,
+
+    // ask before discarding a file's changes
+    "confirm_discard": true,
+
+    // mark the changed characters inside paired deleted/inserted lines
+    "word_diff": true,
+
+    // git executable; sublime's PATH may not include a user-installed git
+    "git_binary": "git",
+
+    "debug": false
+}

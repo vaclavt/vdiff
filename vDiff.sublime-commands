@@ -1,0 +1,4 @@
+[
+    { "caption": "vDiff: Changed Files", "command": "vdiff_files" },
+    { "caption": "vDiff: Recent Commits", "command": "vdiff_commits" }
+]
