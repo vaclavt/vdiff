@@ -361,6 +361,29 @@ def _step_change(delta):
     return act
 
 
+def _act_commit(view, window, st):
+    """Commit the staged files with a message typed into an input panel; Esc there cancels"""
+    if st.in_commit:
+        status("commit works on uncommitted changes only")
+        return
+    staged = [c for c in st.files if c.staged]
+    if not staged:
+        status("no staged files")
+        return
+
+    def on_done(message):
+        if not message.strip():
+            status("commit cancelled: empty message")
+            return
+        noun = "file" if len(staged) == 1 else "files"
+        run_async(
+            lambda: git.commit(st.repo, message),
+            lambda _: refresh_listing(view, st, "committed {} {}".format(len(staged), noun)),
+        )
+
+    window.show_input_panel("Commit message", "", on_done, None, None)
+
+
 def _move_line(forward):
     def act(view, window, st):
         view.run_command("move", {"by": "lines", "forward": forward})
@@ -376,6 +399,7 @@ ACTIONS = {
     "stage": _git_action("stage", "staged", git.stage),
     "unstage": _git_action("unstage", "unstaged", git.unstage),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),
+    "commit": _act_commit,
     "refresh": _act_refresh,
     "open": _act_open,
     "next_file": _step_file(1),

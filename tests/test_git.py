@@ -146,3 +146,26 @@ def test_count_lines(tmp_path):
     assert git._count_lines(p) is None
     open(p, "wb").write(b"")
     assert git._count_lines(p) == 0
+
+
+def test_commit_only_records_staged_files(repo):
+    write(repo, "a.py", "staged\n")
+    write(repo, "b.txt", "left alone\n")
+    changes = {c.path: c for c in git.changed_files(repo)}
+    git.stage(repo, changes["a.py"])
+
+    git.commit(repo, "a message with 'quotes' and \"doubles\"")
+
+    left = {c.path: c for c in git.changed_files(repo)}
+    assert "a.py" not in left and not left["b.txt"].staged
+    info, files = git.commit_with_files(repo, "HEAD")
+    # the message reaches git verbatim: it is one argv element, never a shell string
+    assert info.subject == "a message with 'quotes' and \"doubles\""
+    assert [f.path for f in files] == ["a.py"]
+
+
+def test_commit_without_staged_files_raises(repo):
+    write(repo, "a.py", "unstaged only\n")
+    with pytest.raises(git.GitError) as info:
+        git.commit(repo, "nothing to record")
+    assert info.value.code != 0

@@ -145,3 +145,54 @@ def test_j_and_k_move_the_caret_one_line():
         ("move", {"by": "lines", "forward": True}),
         ("move", {"by": "lines", "forward": False}),
     ]
+
+
+def staged_state(*flags):
+    st = state.ViewState("/repo")
+    st.files = [git.FileChange("f{}.py".format(i), "M", flag, 1, 1, None) for i, flag in enumerate(flags)]
+    return st
+
+
+def test_commit_needs_a_staged_file(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands.sublime, "status_message", lambda m: messages.append(m))
+    window = sublime.Window()
+
+    commands.ACTIONS["commit"](sublime.View(), window, staged_state(False, False))
+    assert messages == ["vDiff: no staged files"] and window.input is None
+
+    # a commit under review has nothing to stage in the first place
+    st = staged_state(True)
+    st.enter("abc", None)
+    commands.ACTIONS["commit"](sublime.View(), window, st)
+    assert messages[-1] == "vDiff: commit works on uncommitted changes only" and window.input is None
+
+
+def test_commit_prompts_then_commits(monkeypatch):
+    committed = []
+    refreshed = []
+    monkeypatch.setattr(commands.git, "commit", lambda repo, message: committed.append((repo, message)))
+    monkeypatch.setattr(commands, "refresh_listing", lambda view, st, message=None: refreshed.append(message))
+    window = sublime.Window()
+
+    commands.ACTIONS["commit"](sublime.View(), window, staged_state(True, False, True))
+    caption, initial, on_done, _, _ = window.input
+    assert caption == "Commit message" and initial == "" and committed == []
+
+    on_done("  ")  # an empty message is not a commit
+    assert committed == []
+
+    on_done("real message")
+    assert committed == [("/repo", "real message")]
+    assert refreshed == ["committed 2 files"]
+
+
+def test_commit_message_counts_one_file(monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(commands.git, "commit", lambda repo, message: None)
+    monkeypatch.setattr(commands, "refresh_listing", lambda view, st, message=None: refreshed.append(message))
+    window = sublime.Window()
+
+    commands.ACTIONS["commit"](sublime.View(), window, staged_state(True, False))
+    window.input[2]("one")
+    assert refreshed == ["committed 1 file"]

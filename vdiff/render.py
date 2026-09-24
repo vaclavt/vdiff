@@ -63,10 +63,11 @@ KEY_GROUPS = [
         Key("f", "changed files", "files", ("files",)),
         Key("c", "recent commits", "commits", ("commits",)),
     ]),
-    ("This file", False, [
+    ("Actions", False, [
         Key("s", "stage", "stage", ("stage",)),
         Key("u", "unstage", "unstage", ("unstage",)),
         Key("d", "discard", "discard", ("discard",)),
+        Key("C m", "commit the staged files", "commit", ("commit",)),
     ]),
     ("View", True, [
         Key("r", "refresh", "refresh", ("refresh",)),
@@ -90,10 +91,11 @@ body { margin: 0; padding: 0.5rem 0.8rem; background-color: color(var(--backgrou
 .ins { color: var(--greenish); font-weight: bold; }
 .state { color: var(--orangish); }
 .actions { margin-left: 1rem; }
+.summary { margin-bottom: 0.3rem; color: color(var(--foreground) alpha(0.75)); }
+.when { color: color(var(--foreground) alpha(0.6)); }
 a { text-decoration: none; padding: 0.15rem 0.5rem; margin-left: 0.3rem; border-radius: 3px;
     background-color: color(var(--foreground) alpha(0.12)); color: var(--foreground); }
 .danger { color: var(--redish); }
-.commit { margin-top: 0.4rem; color: color(var(--foreground) alpha(0.75)); }
 .hash { color: var(--bluish); font-weight: bold; }
 .body { color: color(var(--foreground) alpha(0.6)); }
 """
@@ -280,8 +282,46 @@ def _char_regions(lines, blocks, starts):
     return deleted, inserted
 
 
+def _summary_html(st):
+    """Line above the header: the whole commit on one line, or how much of the tree is staged"""
+    if not st.files and not st.commit:
+        return ""
+    if st.in_commit:
+        text = " · ".join(_commit_parts(st))
+    else:
+        # staged means "has something staged": a partially staged file counts as staged only
+        staged = sum(1 for c in st.files if c.staged)
+        text = "{} staged, {} unstaged".format(staged, len(st.files) - staged)
+    return '<div class="summary">{}</div>'.format(text)
+
+
+def _commit_parts(st):
+    """hash, author, date, totals and message — everything about the reviewed commit, in that order"""
+    info = st.commit
+    parts = []
+    if info:
+        parts.append('<span class="hash">{}</span>'.format(html.escape(info.short)))
+        parts.append(html.escape(info.author))
+        parts.append('<span class="when">{}</span>'.format(html.escape(info.date)))
+    # binary files carry None counts but still changed, so they count toward the file total
+    insertions = sum(c.insertions or 0 for c in st.files)
+    deletions = sum(c.deletions or 0 for c in st.files)
+    parts.append(
+        '{} {} changed <span class="del">-{}</span> <span class="ins">+{}</span>'.format(
+            len(st.files), "file" if len(st.files) == 1 else "files", deletions, insertions
+        )
+    )
+    if info:
+        message = html.escape(info.subject)
+        body = info.body.strip().splitlines()
+        if body:
+            message += ' <span class="body">— {}</span>'.format(html.escape(body[0]))
+        parts.append(message)
+    return parts
+
+
 def header_html(st, ins, dele):
-    """The minihtml header: path, counts, state, action links and the commit line"""
+    """The minihtml header: the summary line, then the shown file's path, counts, state and action links"""
     change = st.change
     if change is None:
         title = '<span class="path">vDiff</span>'
@@ -306,19 +346,8 @@ def header_html(st, ins, dele):
     actions.append('<a href="commits">Commits</a>')
     actions.append('<a href="help" title="keys">?</a>')
 
-    commit = ""
-    if st.in_commit and st.commit:
-        info = st.commit
-        commit = '<div class="commit"><span class="hash">{}</span> · {} · {} · {}'.format(
-            html.escape(info.short), html.escape(info.author), html.escape(info.date), html.escape(info.subject)
-        )
-        body = info.body.strip().splitlines()
-        if body:
-            commit += ' <span class="body">— {}</span>'.format(html.escape(body[0]))
-        commit += "</div>"
-
-    return '<body id="vdiff-header"><style>{}</style><div>{}<span class="actions">{}</span></div>{}</body>'.format(
-        HEADER_CSS, title, "".join(actions), commit
+    return '<body id="vdiff-header"><style>{}</style>{}<div>{}<span class="actions">{}</span></div></body>'.format(
+        HEADER_CSS, _summary_html(st), title, "".join(actions)
     )
 
 

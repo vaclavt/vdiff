@@ -84,10 +84,11 @@ class Phantom:
 
 
 class Window:
-    """Captures the quick panel so tests can drive its callbacks"""
+    """Captures the quick panel and the input panel so tests can drive their callbacks"""
 
     def __init__(self):
         self.panel = None
+        self.input = None
         self.commands = []
 
     def focus_view(self, view):
@@ -98,6 +99,10 @@ class Window:
 
     def show_quick_panel(self, items, on_select, flags=0, selected=-1, on_highlight=None, placeholder=None):
         self.panel = (items, on_select, selected, on_highlight, placeholder)
+
+    def show_input_panel(self, caption, initial_text, on_done, on_change, on_cancel):
+        self.input = (caption, initial_text, on_done, on_change, on_cancel)
+        return View()
 
 
 class View:

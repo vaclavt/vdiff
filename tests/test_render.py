@@ -132,9 +132,9 @@ def test_help_popup_lists_every_key():
     view, html = help_popup(st)
 
     assert view.is_popup_visible()
-    for group in ("Navigate", "Panels", "This file", "View"):
+    for group in ("Navigate", "Panels", "Actions", "View"):
         assert ">{}<".format(group) in html
-    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "r", "?", "esc"):
+    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C m", "r", "?", "esc"):
         assert ">{}<".format(keys) in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
@@ -152,8 +152,9 @@ def test_help_popup_dims_file_actions_in_commit_mode():
     _, html = help_popup(st)
 
     assert "uncommitted only" in html
-    assert html.count('class="dim"') == 3
+    assert html.count('class="dim"') == 4
     assert 'href="stage"' not in html and 'href="unstage"' not in html and 'href="discard"' not in html
+    assert 'href="commit"' not in html
     # everything that still applies stays clickable
     assert 'href="files"' in html and 'href="open"' in html and 'href="refresh"' in html
 
@@ -222,3 +223,50 @@ def test_minihtml_stylesheets_reject_unsupported_selectors():
             head = rule.split("{")[0].strip()
             for selector in filter(None, (s.strip() for s in head.split(","))):
                 assert not unsupported.search(selector), "{}: {}".format(name, selector)
+
+
+# --- header summary line ----------------------------------------------------
+
+
+def test_summary_counts_staged_and_unstaged_files():
+    view = sublime.View()
+    render.init_view(view)
+    st = make_state()
+    st.files = [
+        git.FileChange("a.py", "M", True, 1, 1, None),
+        git.FileChange("b.py", "M", False, 1, 1, None),
+        git.FileChange("c.py", "?", False, 1, 0, None),
+    ]
+    render.render(view, st)
+    assert '<div class="summary">1 staged, 2 unstaged</div>' in header(view)
+
+
+def test_summary_totals_a_commit_and_owns_the_date():
+    view = sublime.View()
+    render.init_view(view)
+    st = make_state()
+    st.enter("abc", git.CommitInfo("abc", "abc1234", "Ann", "2026-09-23 10:00", "Fix things", ""))
+    st.change = git.FileChange("x.py", "M", False, 3, 2, None)
+    st.files = [
+        git.FileChange("x.py", "M", False, 3, 2, None),
+        git.FileChange("y.py", "M", False, 7, 0, None),
+        git.FileChange("logo.png", "M", False, None, None, None),  # binary: no counts, still a file
+    ]
+    render.render(view, st)
+    html = header(view)
+
+    # hash, author, date, totals and message all live on the one summary line
+    summary = html.split('<div class="summary">')[1].split("</div>")[0]
+    for part in ("abc1234", "Ann", "2026-09-23 10:00", "3 files changed", "-2", "+10", "Fix things"):
+        assert part in summary, part
+    # and nowhere else: there is no second commit line any more
+    assert html.count("abc1234") == 1 and html.count("2026-09-23 10:00") == 1
+    assert 'class="commit"' not in html
+
+
+def test_summary_is_omitted_without_a_file_list():
+    view = sublime.View()
+    render.init_view(view)
+    st = make_state()
+    render.render(view, st)
+    assert 'class="summary"' not in header(view)

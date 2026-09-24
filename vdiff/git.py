@@ -236,6 +236,11 @@ def stage(repo, change):
     run(repo, ["add", "-A", "--", change.path])
 
 
+def commit(repo, message):
+    """Commit what is staged; the message is one argv element, so it needs no quoting of its own"""
+    run(repo, ["commit", "-m", message])
+
+
 def unstage(repo, change):
     """Move the file's staged changes back to the working tree"""
     if has_head(repo):
