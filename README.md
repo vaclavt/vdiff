@@ -21,7 +21,7 @@ Keys inside the review view:
 | `s` / `u` / `d` | stage / unstage / discard the file (uncommitted mode) |
 | `C` or `m` | commit the staged files, typing the message in an input panel |
 | `o` or Enter | open the real file at this line |
-| `]` / `[` | next / previous change |
+| `]` / `[` | next / previous change (wraps at the ends) |
 | `n` / `p` | next / previous file of the current list (wraps at the ends) |
 | `j` / `k` | move down / up one line (vim keys) |
 | `r` | refresh |

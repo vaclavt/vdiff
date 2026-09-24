@@ -380,11 +380,15 @@ def _step_file(delta):
 def _step_change(delta):
     def act(view, window, st):
         starts = [start for start, _ in st.blocks]
+        if not starts:
+            status("no changes")
+            return
         row = render.caret_index(view)
         position = bisect.bisect_right(starts, row) if delta > 0 else bisect.bisect_left(starts, row) - 1
-        if not 0 <= position < len(starts):
-            status("no more changes")
-            return
+        wrapped = not 0 <= position < len(starts)
+        position %= len(starts)  # -1 is the last change, len(starts) the first
+        if wrapped:
+            render.flash(view)
         point = render.index_point(view, starts[position])
         view.sel().clear()
         view.sel().add(sublime.Region(point))

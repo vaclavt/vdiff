@@ -403,3 +403,51 @@ def test_first_step_without_a_shown_file_picks_an_end(loading, rings):
     assert requested_path(queue) == "f4.py"
     # neither is a wrap: there was no position to run past
     assert rings == []
+
+
+def at_change(blocks, row):
+    """A rendered view with `blocks` as its changes and the caret on `row`"""
+    view = sublime.View()
+    st = state.ViewState("/repo")
+    st.blocks = blocks
+    view.text = "\n" + "\n".join("l{}".format(i) for i in range(20))
+    view.sel().add(sublime.Region(commands.render.index_point(view, row)))
+    return view, st
+
+
+def test_next_change_wraps_past_the_last(rings):
+    view, st = at_change([(2, 4), (7, 8)], 7)
+
+    commands.ACTIONS["next_change"](view, None, st)
+    assert commands.render.caret_index(view) == 2 and len(rings) == 1
+
+
+def test_prev_change_wraps_before_the_first(rings):
+    view, st = at_change([(2, 4), (7, 8)], 2)
+
+    commands.ACTIONS["prev_change"](view, None, st)
+    assert commands.render.caret_index(view) == 7 and len(rings) == 1
+
+
+def test_stepping_inside_the_changes_does_not_ring(rings):
+    view, st = at_change([(2, 4), (7, 8), (12, 13)], 7)
+
+    commands.ACTIONS["next_change"](view, None, st)
+    commands.ACTIONS["prev_change"](view, None, st)
+    assert commands.render.caret_index(view) == 7 and rings == []
+
+
+def test_single_change_rings_and_stays_put(rings):
+    view, st = at_change([(2, 4)], 2)
+
+    commands.ACTIONS["next_change"](view, None, st)
+    commands.ACTIONS["prev_change"](view, None, st)
+    assert commands.render.caret_index(view) == 2 and len(rings) == 2
+
+
+def test_a_file_without_changes_neither_moves_nor_rings(rings):
+    view, st = at_change([], 3)
+
+    commands.ACTIONS["next_change"](view, None, st)
+    commands.ACTIONS["prev_change"](view, None, st)
+    assert commands.render.caret_index(view) == 3 and rings == []
