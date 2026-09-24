@@ -359,11 +359,20 @@ def _step_file(delta):
         if not st.files:
             status("no file list, press f or c")
             return
-        index = st.index() + delta
-        if not 0 <= index < len(st.files):
-            status("no more files")
-            return
-        show_file(view, st, st.files[index])
+        count = len(st.files)
+        position = st.index()
+        if position < 0:
+            # nothing shown yet: n starts at the first file, p at the last. Not a wrap.
+            index, wrapped = (0 if delta > 0 else count - 1), False
+        else:
+            index = position + delta
+            wrapped = not 0 <= index < count
+            index %= count  # -1 is the last file, count is the first
+        if wrapped:
+            render.flash(view)
+        if index != position:
+            # a one-file list wraps onto itself: ring, but do not re-run git for the same file
+            show_file(view, st, st.files[index])
 
     return act
 

@@ -26,6 +26,11 @@ REGION_KEYS = (KEY_DEL, KEY_INS, KEY_DEL_GUTTER, KEY_INS_GUTTER, KEY_DEL_CHAR, K
 PHANTOM_KEY = "vdiff.header"
 STATUS_KEY = "vdiff"
 
+# visual bell: a whole-buffer tint, erased on a timer. Deliberately not in REGION_KEYS, so the
+# re-render a wrap triggers does not wipe it before it has been seen.
+BELL_KEY = "vdiff.bell"
+BELL_MS = 90
+
 # a block phantom anchored at point 0 is drawn below row 0, so row 0 stays empty and the file starts at row 1.
 # Only index_point / caret_index know about it.
 _HEADER_ROWS = 1
@@ -38,6 +43,8 @@ SCOPE_INS_CHAR = "diff.inserted.char"
 # gutter dots use the scope's foreground
 SCOPE_DEL_MARK = "markup.deleted"
 SCOPE_INS_MARK = "markup.inserted"
+# ST4 defines region.<colour>ish in every bundled scheme for exactly this kind of transient marking
+SCOPE_BELL = "region.yellowish"
 
 # rules written into a colour-scheme override when the active scheme lacks the scopes above
 FALLBACK_RULES = [
@@ -55,7 +62,7 @@ Key = namedtuple("Key", "keys label short actions")
 KEY_GROUPS = [
     ("Navigate", True, [
         Key("] [", "next / previous change", "change", ("next_change", "prev_change")),
-        Key("n p", "next / previous file", "file", ("next_file", "prev_file")),
+        Key("n p", "next / previous file (wraps)", "file", ("next_file", "prev_file")),
         Key("o \u23ce", "open the real file at this line", "open", ("open",)),
         Key("j k", "down / up one line (vim)", "", ("line_down", "line_up")),
     ]),
@@ -174,6 +181,23 @@ def _mtime(path):
         return os.stat(path).st_mtime
     except OSError:
         return None
+
+
+def flash(view):
+    """Visual bell: tint the buffer for a moment, for feedback that has nothing to say in words"""
+    view.add_regions(BELL_KEY, [sublime.Region(0, view.size())], _bell_scope(view), flags=sublime.DRAW_NO_OUTLINE)
+    # unconditional erase: overlapping flashes may cut one short, but none can leave the tint stuck
+    sublime.set_timeout(lambda: view.is_valid() and view.erase_regions(BELL_KEY), BELL_MS)
+
+
+def _bell_scope(view):
+    """region.yellowish, or a scope the plugin guarantees a background for when a scheme lacks it"""
+    try:
+        if view.style_for_scope(SCOPE_BELL).get("background"):
+            return SCOPE_BELL
+    except Exception:
+        LOG.debug("style_for_scope failed for %s", SCOPE_BELL, exc_info=True)
+    return SCOPE_INS
 
 
 def render_message(view, st, message):

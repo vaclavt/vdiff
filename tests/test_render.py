@@ -270,3 +270,36 @@ def test_summary_is_omitted_without_a_file_list():
     st = make_state()
     render.render(view, st)
     assert 'class="summary"' not in header(view)
+
+
+def test_flash_tints_the_buffer_then_clears(monkeypatch):
+    view = sublime.View("some text")
+    timers = []
+    monkeypatch.setattr(render.sublime, "set_timeout", lambda fn, ms=0: timers.append((fn, ms)))
+
+    render.flash(view)
+    regions, scope, _, flags = view.regions[render.BELL_KEY]
+    assert regions == [sublime.Region(0, len(view.text))] and flags == sublime.DRAW_NO_OUTLINE
+    assert scope and timers[0][1] == render.BELL_MS
+
+    timers[0][0]()
+    assert render.BELL_KEY not in view.regions
+
+
+def test_flash_survives_a_re_render(monkeypatch):
+    """The wrap that rings also re-renders; _replace must not wipe the bell before it is seen"""
+    assert render.BELL_KEY not in render.REGION_KEYS
+    monkeypatch.setattr(render.sublime, "set_timeout", lambda fn, ms=0: None)  # hold the bell up
+    view = sublime.View()
+    render.init_view(view)
+    render.flash(view)
+    render.render(view, make_state())
+    assert render.BELL_KEY in view.regions
+
+
+def test_bell_scope_falls_back_when_the_scheme_lacks_it(monkeypatch):
+    view = sublime.View()
+    assert render._bell_scope(view) == render.SCOPE_BELL
+    monkeypatch.setattr(view, "style_for_scope", lambda scope: {"foreground": "#fff"})
+    # an invisible bell is a silent failure, so fall back to a scope the plugin guarantees
+    assert render._bell_scope(view) == render.SCOPE_INS

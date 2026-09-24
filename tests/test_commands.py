@@ -329,3 +329,77 @@ def test_esc_rewinds_the_file_navigation_counts_from(loading):
     st.restore(kept)
     commands.ACTIONS["next_file"](view, window, st)
     assert requested_path(queue) == "f4.py"
+
+
+# --- cycling past the ends --------------------------------------------------
+
+
+@pytest.fixture
+def rings(monkeypatch):
+    """Record visual bells instead of drawing them"""
+    bells = []
+    monkeypatch.setattr(commands.render, "flash", lambda view: bells.append(view))
+    return bells
+
+
+def at_file(files, path):
+    """A loaded working-tree view sitting on `path`"""
+    view, window = sublime.View(), sublime.Window()
+    st = state.ViewState("/repo")
+    st.files = files
+    st.change = st.requested = next(c for c in files if c.path == path)
+    return view, window, st
+
+
+def test_next_file_wraps_past_the_last(loading, rings):
+    queue, _ = loading
+    files = numbered()
+    view, window, st = at_file(files, "f4.py")
+
+    commands.ACTIONS["next_file"](view, window, st)
+    assert requested_path(queue) == "f0.py" and len(rings) == 1
+
+
+def test_prev_file_wraps_before_the_first(loading, rings):
+    queue, _ = loading
+    files = numbered()
+    view, window, st = at_file(files, "f0.py")
+
+    commands.ACTIONS["prev_file"](view, window, st)
+    assert requested_path(queue) == "f4.py" and len(rings) == 1
+
+
+def test_stepping_inside_the_list_does_not_ring(loading, rings):
+    queue, _ = loading
+    files = numbered()
+    view, window, st = at_file(files, "f2.py")
+
+    commands.ACTIONS["next_file"](view, window, st)
+    commands.ACTIONS["prev_file"](view, window, st)
+    assert requested_path(queue) == "f2.py" and rings == []
+
+
+def test_single_file_list_rings_without_refetching(loading, rings):
+    queue, _ = loading
+    files = numbered(1)
+    view, window, st = at_file(files, "f0.py")
+
+    commands.ACTIONS["next_file"](view, window, st)
+    commands.ACTIONS["prev_file"](view, window, st)
+    # it rings both times, but never re-runs git for the file already on screen
+    assert len(rings) == 2 and queue == []
+
+
+def test_first_step_without_a_shown_file_picks_an_end(loading, rings):
+    queue, _ = loading
+    files = numbered()
+    view, window, st = commit_panel(files)  # opening a commit leaves nothing shown
+    assert st.index() == -1
+
+    commands.ACTIONS["next_file"](view, window, st)
+    assert requested_path(queue) == "f0.py"
+    st.requested = None
+    commands.ACTIONS["prev_file"](view, window, st)
+    assert requested_path(queue) == "f4.py"
+    # neither is a wrap: there was no position to run past
+    assert rings == []
