@@ -134,7 +134,7 @@ def test_help_popup_lists_every_key():
     assert view.is_popup_visible()
     for group in ("Navigate", "Panels", "This file", "View"):
         assert ">{}<".format(group) in html
-    for keys in ("] [", "n p", "o ⏎", "f", "c", "s", "u", "d", "r", "?", "esc"):
+    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "r", "?", "esc"):
         assert ">{}<".format(keys) in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
@@ -176,11 +176,15 @@ def test_help_popup_toggles_and_navigates():
 DISPLAY_KEYS = {"enter": "⏎", "escape": "esc"}
 
 
-def test_keymap_matches_help_table():
-    """The keymap, ACTIONS and the popup agree on both the actions and the keys that reach them"""
+def keymap_bindings():
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Default.sublime-keymap")
     with open(path, encoding="utf-8") as f:
-        bindings = json.load(f)
+        return json.load(f)
+
+
+def test_keymap_matches_help_table():
+    """The keymap, ACTIONS and the popup agree on both the actions and the keys that reach them"""
+    bindings = keymap_bindings()
 
     assert all(b["command"] == "vdiff_action" for b in bindings)
     bound = {b["args"]["action"] for b in bindings}
@@ -190,6 +194,20 @@ def test_keymap_matches_help_table():
     # rebinding a key without updating the table would leave the popup and status bar lying
     bound_keys = {DISPLAY_KEYS.get(key, key) for b in bindings for key in b["keys"]}
     assert bound_keys == {token for k in render.KEYS for token in k.keys.split()}
+
+
+# j / k stay live in Vintage command mode on purpose: the view is read-only, so the worst they can do
+# is move the caret, and a vim user should not have to leave command mode to scroll a diff.
+# escape carries its own context (panel / overlay / popup / selection guards) instead.
+UNGUARDED_ACTIONS = {"line_down", "line_up", "close"}
+
+
+def test_command_mode_guard_is_deliberate():
+    """Every binding yields to Vintage except the ones that documented a reason not to"""
+    guard = {"key": "setting.command_mode", "operand": False}
+    for binding in keymap_bindings():
+        unguarded = binding["args"]["action"] in UNGUARDED_ACTIONS
+        assert (guard in binding["context"]) != unguarded, binding["keys"]
 
 
 def test_minihtml_stylesheets_reject_unsupported_selectors():

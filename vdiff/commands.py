@@ -230,8 +230,7 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
 
     def show_commits(self, view, st, commits, selected):
         items = [
-            sublime.QuickPanelItem(c.subject or "(no subject)", "{} · {}".format(c.author, c.date), c.short, COMMIT_KIND)
-            for c in commits
+            sublime.QuickPanelItem(c.subject or "(no subject)", "{} · {}".format(c.author, c.date), c.short, COMMIT_KIND) for c in commits
         ]
         for i, c in enumerate(commits):
             if c.sha == st.sha:
@@ -306,7 +305,9 @@ def _confirm_discard(change):
     if change.status == "?":
         message = "Delete the untracked file {}?\n\nThis cannot be undone.".format(change.path)
     else:
-        message = "Discard all changes to {}?\n\nThe file goes back to its last committed version. This cannot be undone.".format(change.path)
+        message = "Discard all changes to {}?\n\nThe file goes back to its last committed version. This cannot be undone.".format(
+            change.path
+        )
     return sublime.ok_cancel_dialog(message, "Discard")
 
 
@@ -360,6 +361,13 @@ def _step_change(delta):
     return act
 
 
+def _move_line(forward):
+    def act(view, window, st):
+        view.run_command("move", {"by": "lines", "forward": forward})
+
+    return act
+
+
 ACTIONS = {
     "files": _act_files,
     "commits": _act_commits,
@@ -374,6 +382,8 @@ ACTIONS = {
     "prev_file": _step_file(-1),
     "next_change": _step_change(1),
     "prev_change": _step_change(-1),
+    "line_down": _move_line(True),
+    "line_up": _move_line(False),
 }
 
 

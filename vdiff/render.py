@@ -57,6 +57,7 @@ KEY_GROUPS = [
         Key("] [", "next / previous change", "change", ("next_change", "prev_change")),
         Key("n p", "next / previous file", "file", ("next_file", "prev_file")),
         Key("o \u23ce", "open the real file at this line", "open", ("open",)),
+        Key("j k", "down / up one line (vim)", "", ("line_down", "line_up")),
     ]),
     ("Panels", True, [
         Key("f", "changed files", "files", ("files",)),

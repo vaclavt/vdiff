@@ -22,6 +22,7 @@ Keys inside the review view:
 | `o` or Enter | open the real file at this line |
 | `]` / `[` | next / previous change |
 | `n` / `p` | next / previous file of the current list |
+| `j` / `k` | move down / up one line (vim keys) |
 | `r` | refresh |
 | `?` | show this key list in a popup |
 | Esc | close the view |

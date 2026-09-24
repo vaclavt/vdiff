@@ -135,3 +135,13 @@ def test_run_async_reports_generic_error(monkeypatch):
 
     commands.run_async(boom, lambda r: messages.append("done"))
     assert messages == ["vDiff: boom"]
+
+
+def test_j_and_k_move_the_caret_one_line():
+    view = sublime.View()
+    commands.ACTIONS["line_down"](view, None, None)
+    commands.ACTIONS["line_up"](view, None, None)
+    assert view.commands == [
+        ("move", {"by": "lines", "forward": True}),
+        ("move", {"by": "lines", "forward": False}),
+    ]
