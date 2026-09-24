@@ -138,6 +138,10 @@ def init_view(view):
     s.set("show_definitions", False)
     s.set("mini_diff", False)
     s.set("spell_check", False)
+    # a read-only viewer, so vim's insert mode is meaningless: open in command mode with the block
+    # caret. vdiff's own keys carry no command_mode context, so they fire in either mode regardless.
+    s.set("command_mode", True)
+    s.set("inverse_caret_state", True)
     view.set_scratch(True)
     view.set_read_only(True)
     if not view.name():

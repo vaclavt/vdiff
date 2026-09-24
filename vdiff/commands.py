@@ -84,6 +84,8 @@ def open_review(window):
 def show_file(view, st, change):
     """Fetch and parse the file's diff on the worker thread, then render it"""
     st.token += 1
+    # set before the worker starts: n / p count from here while the diff is still loading
+    st.requested = change
     token = st.token
     repo, sha = st.repo, st.sha
 

@@ -1,3 +1,5 @@
+import pytest
+
 import sublime  # the stub, via conftest
 
 from vdiff import commands, git, state
@@ -236,3 +238,94 @@ def test_commit_items_keep_a_readable_subject_when_the_annotation_is_huge():
 
 def test_commit_items_fall_back_for_an_empty_subject():
     assert commands.commit_items([commit("")])[0].trigger == "(no subject)"
+
+
+# --- navigating while a diff is still loading -------------------------------
+
+
+@pytest.fixture
+def loading(monkeypatch):
+    """Queue run_async instead of running it inline, so a test can act mid-load like a user can
+
+    The stub runs set_timeout synchronously, which is why the real plugin's async window - the one
+    n / p used to read stale state through - is invisible to every other test in the suite.
+    """
+    queue = []
+    monkeypatch.setattr(commands, "run_async", lambda work, done: queue.append((work, done)))
+    monkeypatch.setattr(commands.render, "render", lambda view, st: None)
+    monkeypatch.setattr(commands.git, "full_diff", lambda *a, **k: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n")
+
+    def flush():
+        while queue:
+            work, done = queue.pop(0)
+            done(work())
+
+    return queue, flush
+
+
+def commit_panel(files):
+    """A review view showing a commit, its file panel open, nothing loaded yet"""
+    view, window = sublime.View(), sublime.Window()
+    st = state.ViewState("/repo")
+    st.enter("abc", git.CommitInfo("abc", "abc1234", "A", "d", "s", ""))
+    commands.show_files_panel(window, view, st, files, st.kept(), placeholder="c")
+    return view, window, st
+
+
+def numbered(count=5):
+    return [git.FileChange("f{}.py".format(i), "M", False, 1, 1, None) for i in range(count)]
+
+
+def requested_path(queue):
+    """Path of the file the newest queued load will fetch"""
+    return queue[-1][0].__closure__[0].cell_contents.path
+
+
+def test_next_file_steps_from_the_file_being_loaded(loading):
+    queue, _ = loading
+    files = numbered()
+    view, window, st = commit_panel(files)
+
+    window.panel[1](2)  # Enter on the third file; its diff has not arrived yet
+    assert st.change is None
+    commands.ACTIONS["next_file"](view, window, st)
+    assert requested_path(queue) == "f3.py"
+
+
+def test_prev_file_works_before_the_diff_arrives(loading, monkeypatch):
+    queue, _ = loading
+    messages = []
+    monkeypatch.setattr(commands.sublime, "status_message", lambda m: messages.append(m))
+    files = numbered()
+    view, window, st = commit_panel(files)
+
+    window.panel[1](2)
+    commands.ACTIONS["prev_file"](view, window, st)
+    assert requested_path(queue) == "f1.py" and messages == []
+
+
+def test_rapid_next_file_presses_each_advance(loading):
+    queue, flush = loading
+    files = numbered()
+    view, window, st = commit_panel(files)
+
+    window.panel[1](1)
+    for _ in range(3):
+        commands.ACTIONS["next_file"](view, window, st)
+    assert requested_path(queue) == "f4.py"
+    flush()
+    assert st.change.path == "f4.py"
+
+
+def test_esc_rewinds_the_file_navigation_counts_from(loading):
+    queue, flush = loading
+    files = numbered()
+    view, window, st = commit_panel(files)
+    window.panel[1](3)
+    flush()
+
+    kept = st.kept()
+    window.panel[1](0)  # preview another file, then back out
+    st.restore(kept)
+    commands.ACTIONS["next_file"](view, window, st)
+    assert requested_path(queue) == "f4.py"

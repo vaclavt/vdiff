@@ -30,6 +30,7 @@ class ViewState:
     sha: object = None  # None in working-tree mode, the reviewed commit's hash otherwise
     commit: object = None  # git.CommitInfo when sha is set
     change: object = None  # git.FileChange currently shown
+    requested: object = None  # file asked for, maybe still loading; navigation counts from here
     files: list = field(default_factory=list)  # git.FileChange list the user is browsing (next/prev file)
     lines: list = field(default_factory=list)  # parse.Line list currently rendered
     blocks: list = field(default_factory=list)  # parse.change_blocks(lines)
@@ -44,8 +45,13 @@ class ViewState:
         return self.sha is not None
 
     def index(self):
-        """Position of the shown file in `files`, or -1"""
-        return find_change(self.files, self.change.path) if self.change else -1
+        """Position in `files` of the file being shown or loaded, or -1
+
+        `requested` leads: a diff arrives asynchronously, so counting from `change` alone would make
+        n / p step from whatever was on screen before the pending file landed.
+        """
+        change = self.requested or self.change
+        return find_change(self.files, change.path) if change else -1
 
     def kept(self):
         return Kept(self.sha, self.commit, self.change, list(self.files))
@@ -54,12 +60,13 @@ class ViewState:
         """Switch to browsing a commit (or the working tree); returns what to restore on Esc"""
         kept = self.kept()
         if sha != self.sha:
-            self.change = None
+            self.change = self.requested = None
         self.sha, self.commit = sha, commit
         return kept
 
     def restore(self, kept):
         self.sha, self.commit, self.change, self.files = kept
+        self.requested = kept.change
 
     def persist(self, view):
         """Mirror the essentials into view settings (survives a restart)"""

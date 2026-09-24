@@ -197,18 +197,18 @@ def test_keymap_matches_help_table():
     assert bound_keys == {token for k in render.KEYS for token in k.keys.split()}
 
 
-# j / k stay live in Vintage command mode on purpose: the view is read-only, so the worst they can do
-# is move the caret, and a vim user should not have to leave command mode to scroll a diff.
-# escape carries its own context (panel / overlay / popup / selection guards) instead.
-UNGUARDED_ACTIONS = {"line_down", "line_up", "close"}
+def test_no_binding_yields_to_vintage_command_mode():
+    """The review view is read-only, so its letters are vdiff commands in either vim mode
 
-
-def test_command_mode_guard_is_deliberate():
-    """Every binding yields to Vintage except the ones that documented a reason not to"""
+    init_view opens the view in command mode; a binding that still carried the old
+    `command_mode: false` context would go dead there, which is what broke n / p.
+    """
     guard = {"key": "setting.command_mode", "operand": False}
     for binding in keymap_bindings():
-        unguarded = binding["args"]["action"] in UNGUARDED_ACTIONS
-        assert (guard in binding["context"]) != unguarded, binding["keys"]
+        assert guard not in binding["context"], binding["keys"]
+    view = sublime.View()
+    render.init_view(view)
+    assert view.settings().get("command_mode") is True
 
 
 def test_minihtml_stylesheets_reject_unsupported_selectors():
