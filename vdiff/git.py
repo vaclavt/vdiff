@@ -1,11 +1,13 @@
 """ Git access: every call is one subprocess; results are plain tuples, no sublime imports (testable) """
 import os
+import re
 import subprocess
 from collections import namedtuple
 
 # path, one-letter status (M A D R ?), staged flag, numstat counts (None for binary), rename source
 FileChange = namedtuple("FileChange", "path status staged insertions deletions old_path")
-Commit = namedtuple("Commit", "sha short author date subject")
+# shortstat totals; all three are None when git prints no diffstat (merges, empty commits)
+Commit = namedtuple("Commit", "sha short author date subject files insertions deletions")
 CommitInfo = namedtuple("CommitInfo", "sha short author date subject body")
 
 # hash of the empty tree: the diff base for a repository without commits
@@ -30,6 +32,9 @@ STATUS_NAMES = {
 
 _INFO_FORMAT = "%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%b"
 _DATE_FORMAT = "--date=format:%Y-%m-%d %H:%M"
+
+# " 3 files changed, 10 insertions(+), 2 deletions(-)" - either count clause is dropped when zero
+_SHORTSTAT = re.compile(r"\s*(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
 
 
 class GitError(Exception):
@@ -178,12 +183,18 @@ def recent_commits(repo, count):
     """Last `count` commits, newest first; empty list without commits"""
     if not has_head(repo):
         return []
-    text = run(repo, ["log", "-n", str(count), "--format=%H%x1f%h%x1f%an%x1f%ar%x1f%s"])
+    # --shortstat rides along on the same call: one subprocess, totals for free
+    text = run(repo, ["log", "-n", str(count), "--format=%H%x1f%h%x1f%an%x1f%ar%x1f%s", "--shortstat"])
     commits = []
     for line in text.split("\n"):
         parts = line.split("\x1f")
         if len(parts) == 5:
-            commits.append(Commit(*parts))
+            commits.append(Commit(*parts, files=None, insertions=None, deletions=None))
+            continue
+        stat = commits and commits[-1].files is None and _SHORTSTAT.match(line)
+        if stat:
+            files, ins, dele = (int(g or 0) for g in stat.groups())
+            commits[-1] = commits[-1]._replace(files=files, insertions=ins, deletions=dele)
     return commits
 
 

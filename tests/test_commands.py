@@ -196,3 +196,43 @@ def test_commit_message_counts_one_file(monkeypatch):
     commands.ACTIONS["commit"](sublime.View(), window, staged_state(True, False))
     window.input[2]("one")
     assert refreshed == ["committed 1 file"]
+
+
+def commit(subject, files=1, insertions=1, deletions=0, short="abc1234"):
+    return git.Commit("a" * 40, short, "Ann", "2 days ago", subject, files, insertions, deletions)
+
+
+def test_commit_items_show_totals_before_the_hash():
+    plural, single, merge = commands.commit_items(
+        [
+            commit("fix the parser", 23, 210, 0, "fda1368"),
+            commit("tweak", 1, 1, 2, "d45a250"),
+            commit("merge branch 'side'", None, None, None, "beef123"),
+        ]
+    )
+    assert plural.annotation == "23 files changed  -0 +210  fda1368"
+    assert single.annotation == "1 file changed  -2 +1  d45a250"
+    # no diffstat for a merge, so the row falls back to the hash alone
+    assert merge.annotation == "beef123"
+    assert plural.trigger == "fix the parser" and plural.details == "Ann · 2 days ago"
+
+
+def test_long_subject_is_clipped_to_clear_the_annotation():
+    long_subject = "a subject that runs on and on " * 6
+    item = commands.commit_items([commit(long_subject, 3, 9, 4)])[0]
+
+    assert item.trigger.endswith("..") and item.trigger[:-2] == long_subject[: len(item.trigger) - 2]
+    # the clipped subject plus the annotation fit the row, leaving the totals and hash readable
+    assert len(item.trigger) + len(item.annotation) <= commands.COMMIT_ROW_WIDTH
+    # a subject that already fits is left alone
+    assert commands.commit_items([commit("short one")])[0].trigger == "short one"
+
+
+def test_commit_items_keep_a_readable_subject_when_the_annotation_is_huge():
+    # an annotation long enough to eat the whole row: the subject still keeps its floor
+    item = commands.commit_items([commit("x" * 200, 999999, 999999, 999999, "a" * 90)])[0]
+    assert len(item.trigger) == commands.MIN_SUBJECT_WIDTH and item.trigger.endswith("..")
+
+
+def test_commit_items_fall_back_for_an_empty_subject():
+    assert commands.commit_items([commit("")])[0].trigger == "(no subject)"

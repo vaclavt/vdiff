@@ -109,6 +109,37 @@ def test_commits(repo):
     assert info.sha == commits[0].sha
 
 
+def test_recent_commits_carry_shortstat_totals(repo):
+    write(repo, "new.py", "one\ntwo\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-q", "-m", "added a file")
+    write(repo, "a.py", "x\n")  # 6 lines become 1
+    write(repo, "b.txt", "y\n")  # 1 line becomes 1
+    sh(repo, "commit", "-q", "-am", "changed two files")
+
+    newest, added, initial = git.recent_commits(repo, 3)
+    assert (newest.files, newest.insertions, newest.deletions) == (2, 2, 7)
+    # a pure addition: git omits the deletions clause entirely, which reads as zero, not unknown
+    assert (added.files, added.insertions, added.deletions) == (1, 2, 0)
+    assert initial.subject == "initial" and initial.files == 3
+
+
+def test_commits_without_a_diffstat_report_no_totals(repo):
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "empty")
+    sh(repo, "checkout", "-q", "-b", "side")
+    write(repo, "s.py", "s\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-q", "-m", "on the side")
+    sh(repo, "checkout", "-q", "main")
+    sh(repo, "merge", "-q", "--no-ff", "side", "-m", "merge side")
+
+    totals = {c.subject: (c.files, c.insertions, c.deletions) for c in git.recent_commits(repo, 5)}
+    # git log prints no diffstat for either, so the totals stay unknown rather than a false zero
+    assert totals["merge side"] == (None, None, None)
+    assert totals["empty"] == (None, None, None)
+    assert totals["on the side"] == (1, 1, 0)
+
+
 def test_no_head_repo(tmp_path):
     repo = str(tmp_path)
     sh(repo, "init", "-q")

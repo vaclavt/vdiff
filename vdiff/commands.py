@@ -21,6 +21,11 @@ STATUS_COLOURS = {
 }
 COMMIT_KIND = (sublime.KIND_ID_COLOR_BLUISH, "c", "commit")
 
+# a quick-panel row draws the annotation hard right on the subject's line; past this budget the
+# subject would run into it, so it is clipped. The floor keeps a readable stub on a narrow panel.
+COMMIT_ROW_WIDTH = 120
+MIN_SUBJECT_WIDTH = 24
+
 # highlight-to-preview delay: holding an arrow key must not spawn a git process per row
 PREVIEW_DELAY_MS = 60
 
@@ -115,6 +120,24 @@ def file_items(files):
         else:
             annotation = "-{} +{}".format(change.deletions, change.insertions)
         items.append(sublime.QuickPanelItem(change.path, details, annotation, kind))
+    return items
+
+
+def commit_items(commits):
+    """Quick-panel rows: subject on the left, its totals and the hash right-aligned"""
+    items = []
+    for c in commits:
+        annotation = c.short
+        if c.files is not None:
+            # merges and empty commits have no diffstat, so they show the hash alone
+            annotation = "{} {} changed  -{} +{}  {}".format(
+                c.files, "file" if c.files == 1 else "files", c.deletions, c.insertions, c.short
+            )
+        subject = c.subject or "(no subject)"
+        budget = max(COMMIT_ROW_WIDTH - len(annotation), MIN_SUBJECT_WIDTH)
+        if len(subject) > budget:
+            subject = subject[: budget - 2] + ".."
+        items.append(sublime.QuickPanelItem(subject, "{} · {}".format(c.author, c.date), annotation, COMMIT_KIND))
     return items
 
 
@@ -229,9 +252,7 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
         run_async(lambda: git.recent_commits(st.repo, count), done)
 
     def show_commits(self, view, st, commits, selected):
-        items = [
-            sublime.QuickPanelItem(c.subject or "(no subject)", "{} · {}".format(c.author, c.date), c.short, COMMIT_KIND) for c in commits
-        ]
+        items = commit_items(commits)
         for i, c in enumerate(commits):
             if c.sha == st.sha:
                 selected = i
