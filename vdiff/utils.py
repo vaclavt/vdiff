@@ -38,10 +38,10 @@ def run_async(work, done):
     def job():
         try:
             result = work()
-        except (git.GitError, OSError) as error:
-            LOG.warning("git failed: %s", error)
-            # `error` is unbound once the except block ends; the callback runs later
+        except Exception as error:
+            # the traceback helps when debugging; the status message is what the user sees
             message = str(error) or error.__class__.__name__
+            LOG.warning("vdiff worker failed: %s", message, exc_info=LOG.isEnabledFor(logging.DEBUG))
             sublime.set_timeout(lambda: status(message))
             return
         sublime.set_timeout(lambda: done(result))

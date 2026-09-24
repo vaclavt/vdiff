@@ -45,10 +45,12 @@ class GitError(Exception):
 def run(repo, args, ok_codes=(0,)):
     """Run git in `repo`, return stdout as text"""
     cmd = [GIT_BINARY, "-c", "core.quotepath=off", "--no-pager"] + list(args)
-    proc = subprocess.run(cmd, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(
+        cmd, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace"
+    )
     if proc.returncode not in ok_codes:
-        raise GitError(proc.stderr.decode("utf-8", "replace"), proc.returncode)
-    return proc.stdout.decode("utf-8", "replace")
+        raise GitError(proc.stderr, proc.returncode)
+    return proc.stdout
 
 
 def repo_root(path):
@@ -79,6 +81,11 @@ def base_ref(repo):
     return "HEAD" if has_head(repo) else EMPTY_TREE
 
 
+def _int_or_none(value):
+    """A numstat count: "-" marks a binary file"""
+    return None if value == "-" else int(value)
+
+
 def _parse_numstat(text):
     """`--numstat -z` output -> {path: (insertions, deletions, old_path)}"""
     result = {}
@@ -91,9 +98,9 @@ def _parse_numstat(text):
         old_path = None
         if path == "":
             # rename: counts, then old and new path as separate NUL fields
-            old_path = next(fields, None)
+            old_path = next(fields, "") or None
             path = next(fields, "")
-        result[path] = (None if ins == "-" else int(ins), None if dele == "-" else int(dele), old_path)
+        result[path] = (_int_or_none(ins), _int_or_none(dele), old_path)
     return result
 
 
@@ -146,7 +153,8 @@ def changed_files(repo):
     for entry in entries:
         kind = entry[0]
         if kind == "1":
-            xy, path = entry.split(" ", 8)[1], entry.split(" ", 8)[-1]
+            fields = entry.split(" ", 8)
+            xy, path = fields[1], fields[-1]
         elif kind == "u":
             xy, path = "UU", entry.split(" ", 10)[-1]
         elif kind == "?":

@@ -1,7 +1,8 @@
 """ Unified diff -> lines with old/new numbers, change blocks, word-level ranges; no sublime imports """
 import difflib
 import re
-from collections import namedtuple
+from collections import Counter, namedtuple
+from itertools import groupby
 
 # kind is " " (context), "-" (deleted) or "+" (inserted); the missing number is None
 Line = namedtuple("Line", "kind old_no new_no text")
@@ -51,31 +52,22 @@ def parse_unified(text):
     return Diff(lines, binary)
 
 
+def runs(items, key):
+    """(key value, start, end) for each maximal run of consecutive items with the same key"""
+    for value, group in groupby(enumerate(items), key=lambda pair: key(pair[1])):
+        indexes = [i for i, _ in group]
+        yield value, indexes[0], indexes[-1] + 1
+
+
 def change_blocks(lines):
     """[(start, end)) index ranges of consecutive changed lines"""
-    blocks = []
-    start = None
-    for i, line in enumerate(lines):
-        if line.kind != " ":
-            if start is None:
-                start = i
-        elif start is not None:
-            blocks.append((start, i))
-            start = None
-    if start is not None:
-        blocks.append((start, len(lines)))
-    return blocks
+    return [(start, end) for changed, start, end in runs(lines, lambda line: line.kind != " ") if changed]
 
 
 def counts(lines):
     """(insertions, deletions)"""
-    ins = dele = 0
-    for line in lines:
-        if line.kind == "+":
-            ins += 1
-        elif line.kind == "-":
-            dele += 1
-    return ins, dele
+    tally = Counter(line.kind for line in lines)
+    return tally["+"], tally["-"]
 
 
 def paired_lines(lines, block):

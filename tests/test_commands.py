@@ -124,3 +124,14 @@ def test_run_async_reports_git_error(monkeypatch):
 
     commands.run_async(boom, lambda r: messages.append("done"))
     assert messages == ["vDiff: fatal: bad revision 'nope'"]
+
+
+def test_run_async_reports_generic_error(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands.sublime, "status_message", lambda m: messages.append(m))
+
+    def boom():
+        raise ValueError("boom")
+
+    commands.run_async(boom, lambda r: messages.append("done"))
+    assert messages == ["vDiff: boom"]

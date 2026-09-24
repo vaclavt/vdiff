@@ -1,5 +1,6 @@
 """ Per-view state of review views, keyed by view id; the essentials are mirrored into view settings for restore """
 from collections import namedtuple
+from dataclasses import dataclass, field
 
 # view setting marking a review view (keymap context "setting.vdiff_view")
 VIEW_FLAG = "vdiff_view"
@@ -18,25 +19,25 @@ def find_change(files, path):
     return -1
 
 
+@dataclass(eq=False)
 class ViewState:
     """Everything a review view needs to re-render itself and act on its file
 
     `sha` is None in working-tree mode and the reviewed commit's hash otherwise.
     """
 
-    def __init__(self, repo):
-        self.repo = repo
-        self.sha = None
-        self.commit = None  # git.CommitInfo when sha is set
-        self.change = None  # git.FileChange currently shown
-        self.files = []  # git.FileChange list the user is browsing (next/prev file)
-        self.lines = []  # parse.Line list currently rendered
-        self.blocks = []  # parse.change_blocks(lines)
-        self.binary = False
-        self.token = 0  # bumped per show request; a stale async result is dropped
-        self.rendered_token = -1  # token of the request that produced the current render
-        self.highlight = 0  # bumped per quick-panel highlight, to debounce previews
-        self.fingerprint = None  # (file mtime, index mtime) at render time, working-tree mode
+    repo: str
+    sha: object = None  # None in working-tree mode, the reviewed commit's hash otherwise
+    commit: object = None  # git.CommitInfo when sha is set
+    change: object = None  # git.FileChange currently shown
+    files: list = field(default_factory=list)  # git.FileChange list the user is browsing (next/prev file)
+    lines: list = field(default_factory=list)  # parse.Line list currently rendered
+    blocks: list = field(default_factory=list)  # parse.change_blocks(lines)
+    binary: bool = False
+    token: int = 0  # bumped per show request; a stale async result is dropped
+    rendered_token: int = -1  # token of the request that produced the current render
+    highlight: int = 0  # bumped per quick-panel highlight, to debounce previews
+    fingerprint: object = None  # (file mtime, index mtime) at render time, working-tree mode
 
     @property
     def in_commit(self):
@@ -75,6 +76,11 @@ STATES = {}
 
 def get(view):
     return STATES.get(view.id())
+
+
+def tracked():
+    """Snapshot of (view id, state) for every tracked review view"""
+    return list(STATES.items())
 
 
 def put(view, st):

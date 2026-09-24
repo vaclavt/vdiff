@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import os
+from collections import namedtuple
 
 import sublime
 import sublime_plugin
@@ -46,7 +47,39 @@ FALLBACK_RULES = [
     {"scope": SCOPE_INS_CHAR, "background": "hsla(114, 45%, 68%, 0.30)", "foreground_adjust": "l(+ 10%)"},
 ]
 
-KEY_HINTS = "f files   c commits   s stage   u unstage   d discard   o open   ] [ change   n p file   r refresh"
+# one source for the status-bar hints and the ? popup.
+# actions: the ACTIONS names the row covers; a single one makes the row a link. short: status-bar
+# wording, "" keeps the row out of it. The group flag is False for groups needing a working-tree file.
+Key = namedtuple("Key", "keys label short actions")
+
+KEY_GROUPS = [
+    ("Navigate", True, [
+        Key("] [", "next / previous change", "change", ("next_change", "prev_change")),
+        Key("n p", "next / previous file", "file", ("next_file", "prev_file")),
+        Key("o \u23ce", "open the real file at this line", "open", ("open",)),
+    ]),
+    ("Panels", True, [
+        Key("f", "changed files", "files", ("files",)),
+        Key("c", "recent commits", "commits", ("commits",)),
+    ]),
+    ("This file", False, [
+        Key("s", "stage", "stage", ("stage",)),
+        Key("u", "unstage", "unstage", ("unstage",)),
+        Key("d", "discard", "discard", ("discard",)),
+    ]),
+    ("View", True, [
+        Key("r", "refresh", "refresh", ("refresh",)),
+        Key("?", "this list", "keys", ("help",)),
+        Key("esc", "close the view", "", ("close",)),
+    ]),
+]
+
+KEYS = [key for _, _, group in KEY_GROUPS for key in group]
+
+KEY_HINTS = "   ".join("{} {}".format(k.keys, k.short) for k in KEYS if k.short)
+
+# the popup font is the editor's, so the key column is padded to a fixed width in characters
+_KEY_WIDTH = max(len(k.keys) for k in KEYS)
 
 HEADER_CSS = """
 body { margin: 0; padding: 0.5rem 0.8rem; background-color: color(var(--background) blend(var(--foreground) 93%)); }
@@ -62,6 +95,21 @@ a { text-decoration: none; padding: 0.15rem 0.5rem; margin-left: 0.3rem; border-
 .commit { margin-top: 0.4rem; color: color(var(--foreground) alpha(0.75)); }
 .hash { color: var(--bluish); font-weight: bold; }
 .body { color: color(var(--foreground) alpha(0.6)); }
+"""
+
+# minihtml stops applying a stylesheet at the first selector it cannot parse, and its documentation
+# covers properties only, not selectors: every rule here sticks to one bare element or one class,
+# the forms HEADER_CSS proves work. The first group's margin stands in for body's top padding, and
+# .kdim takes its colour from the .dim row around it.
+HELP_CSS = """
+body { margin: 0; padding: 0 0.8rem 0.6rem 0.8rem; }
+.group { margin-top: 0.6rem; color: var(--bluish); font-weight: bold; }
+.note { color: color(var(--foreground) alpha(0.5)); font-weight: normal; }
+.row { color: color(var(--foreground) alpha(0.85)); }
+.dim { color: color(var(--foreground) alpha(0.35)); }
+.k { color: var(--orangish); font-weight: bold; }
+.kdim { font-weight: bold; }
+a { text-decoration: none; color: color(var(--foreground) alpha(0.85)); }
 """
 
 
@@ -212,16 +260,10 @@ def _row_starts(lines):
 def _line_regions(lines, starts):
     """Full-line regions of deleted and inserted rows, consecutive rows merged"""
     regions = {"-": [], "+": []}
-    run_kind = None
-    run_start = 0
-    for i in range(len(lines) + 1):
-        kind = lines[i].kind if i < len(lines) else None
-        if kind == run_kind:
-            continue
-        if run_kind in regions:
-            # min(): the last line's region stops at the buffer end instead of one past it
-            regions[run_kind].append(sublime.Region(starts[run_start], min(starts[i], starts[-1])))
-        run_kind, run_start = kind, i
+    for kind, start, end in parse.runs(lines, lambda line: line.kind):
+        if kind in regions:
+            # starts has a sentinel at len(lines): the last line stops at the buffer end
+            regions[kind].append(sublime.Region(starts[start], starts[end]))
     return regions["-"], regions["+"]
 
 
@@ -261,6 +303,7 @@ def header_html(st, ins, dele):
         actions.append('<a href="open">Open</a>')
     actions.append('<a href="files">Files</a>')
     actions.append('<a href="commits">Commits</a>')
+    actions.append('<a href="help" title="keys">?</a>')
 
     commit = ""
     if st.in_commit and st.commit:
@@ -278,14 +321,58 @@ def header_html(st, ins, dele):
     )
 
 
+def _run_action(view, href):
+    """Dispatch a header or popup link through the same command the keymap uses"""
+    view.run_command("vdiff_action", {"action": href})
+
+
 def _header(view, st, ins, dele):
     """One block phantom above the text; redrawn from scratch, so no PhantomSet state to keep"""
 
     def navigate(href):
-        view.run_command("vdiff_action", {"action": href})
+        _run_action(view, href)
 
     view.erase_phantoms(PHANTOM_KEY)
     view.add_phantom(PHANTOM_KEY, sublime.Region(0), header_html(st, ins, dele), sublime.LAYOUT_BLOCK, navigate)
+
+
+# --- key help popup ---------------------------------------------------------
+
+
+def help_html(st):
+    """The minihtml key list; rows that need a working-tree file are dimmed while a commit is shown"""
+    parts = []
+    for title, applies, group in KEY_GROUPS:
+        dim = st.in_commit and not applies
+        heading = html.escape(title)
+        if dim:
+            heading += ' <span class="note">uncommitted only</span>'
+        parts.append('<div class="group">{}</div>'.format(heading))
+        # one class per element: a compound selector would silently drop the rest of HELP_CSS
+        row_class, key_class = ("dim", "kdim") if dim else ("row", "k")
+        for key in group:
+            row = '<span class="{}">{}</span>{}{}'.format(
+                key_class, html.escape(key.keys), "&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2), html.escape(key.label)
+            )
+            if len(key.actions) == 1 and not dim:
+                row = '<a href="{}">{}</a>'.format(key.actions[0], row)
+            parts.append('<div class="{}">{}</div>'.format(row_class, row))
+    return '<body id="vdiff-help"><style>{}</style>{}</body>'.format(HELP_CSS, "".join(parts))
+
+
+def show_help(view, st):
+    """Toggle the key list popup at the caret"""
+    if view.is_popup_visible():
+        view.hide_popup()
+        return
+
+    def navigate(href):
+        view.hide_popup()
+        _run_action(view, href)
+
+    # minihtml sizes follow the editor font, so fixed pixel bounds would clip at a large font size
+    em = view.em_width() or 8
+    view.show_popup(help_html(st), location=-1, max_width=int(em * 56), max_height=int(em * 44), on_navigate=navigate)
 
 
 # --- colour scheme fallback -------------------------------------------------

@@ -23,6 +23,7 @@ Keys inside the review view:
 | `]` / `[` | next / previous change |
 | `n` / `p` | next / previous file of the current list |
 | `r` | refresh |
+| `?` | show this key list in a popup |
 | Esc | close the view |
 
 The header links do the same with the mouse. Settings: `vDiff.sublime-settings`.

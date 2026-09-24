@@ -113,6 +113,9 @@ class View:
         self.name_ = ""
         self.sel_ = []
         self.status = {}
+        self.commands = []
+        self.popup = None
+        self.popup_navigate = None
 
     def id(self):
         return 1
@@ -129,6 +132,8 @@ class View:
     def run_command(self, name, args=None):
         if name == "vdiff_replace":
             self.replace(None, Region(0, self.size()), args["text"])
+        else:
+            self.commands.append((name, args))
 
     def set_read_only(self, flag):
         self.read_only = flag
@@ -184,6 +189,18 @@ class View:
 
     def show_at_center(self, point):
         pass
+
+    def show_popup(self, content, flags=0, location=-1, max_width=320, max_height=240, on_navigate=None, on_hide=None):
+        self.popup, self.popup_navigate = content, on_navigate
+
+    def hide_popup(self):
+        self.popup = None
+
+    def is_popup_visible(self):
+        return self.popup is not None
+
+    def em_width(self):
+        return 8.0
 
     def style_for_scope(self, scope):
         return {"foreground": "#ffffff", "background": "#333333"}

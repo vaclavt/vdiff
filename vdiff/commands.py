@@ -107,12 +107,10 @@ def file_items(files):
         description = git.STATUS_NAMES.get(change.status, "")
         colour = STATUS_COLOURS.get(change.status)
         kind = (colour, change.status, description) if colour else sublime.KIND_AMBIGUOUS
-        details = description
-        if change.staged:
-            details += ", staged"
+        details = ", ".join(filter(None, (description, "staged" if change.staged else "")))
         if change.old_path:
             details += "  ← " + change.old_path
-        if change.insertions is None or change.deletions is None:
+        if None in (change.insertions, change.deletions):
             annotation = "binary"
         else:
             annotation = "-{} +{}".format(change.deletions, change.insertions)
@@ -283,6 +281,10 @@ def _act_close(view, window, st):
     view.close()
 
 
+def _act_help(view, window, st):
+    render.show_help(view, st)
+
+
 def _git_action(verb, done_verb, operation, confirm=None):
     """Action running `operation(repo, change)` on the shown working-tree file, then re-listing"""
 
@@ -362,6 +364,7 @@ ACTIONS = {
     "files": _act_files,
     "commits": _act_commits,
     "close": _act_close,
+    "help": _act_help,
     "stage": _git_action("stage", "staged", git.stage),
     "unstage": _git_action("unstage", "unstaged", git.unstage),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),

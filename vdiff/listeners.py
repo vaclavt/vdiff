@@ -17,7 +17,7 @@ class VdiffEventListener(sublime_plugin.EventListener):
 
     def on_post_save(self, view):
         """Review views showing the saved file re-render; the fingerprint decides which ones"""
-        for view_id, st in list(state.STATES.items()):
+        for view_id, st in state.tracked():
             review = sublime.View(view_id)
             if review.is_valid():
                 refresh_if_changed(review, st)
