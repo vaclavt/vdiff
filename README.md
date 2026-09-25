@@ -18,7 +18,7 @@ Keys inside the review view:
 | key | action |
 |---|---|
 | `f` / `c` | changed files / recent commits panel |
-| `s` / `u` / `d` | stage / unstage / discard the file (uncommitted mode) |
+| `s` / `u` / `d` | stage / unstage / discard the file (uncommitted mode); `s` then moves on to the next unstaged file |
 | `C` or `m` | commit the staged files, typing the message in an input panel |
 | `o` or Enter | open the real file at this line |
 | `]` / `[` | next / previous change (wraps at the ends) |

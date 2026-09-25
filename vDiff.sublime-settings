@@ -5,6 +5,9 @@
     // ask before discarding a file's changes
     "confirm_discard": true,
 
+    // after staging a file, move on to the next unstaged file of the list
+    "stage_and_move_next_file": true,
+
     // mark the changed characters inside paired deleted/inserted lines
     "word_diff": true,
 

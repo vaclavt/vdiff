@@ -176,8 +176,12 @@ def show_files_panel(window, view, st, files, kept, on_cancel=None, placeholder=
     window.show_quick_panel(file_items(files), on_select, 0, selected, on_highlight, placeholder)
 
 
-def refresh_listing(view, st, message=None):
-    """Re-list the working tree changes and show the same file, or the next one when it is gone"""
+def refresh_listing(view, st, message=None, pick=None):
+    """Re-list the working tree changes and show the same file, or the next one when it is gone
+
+    `pick(files, index)` may name another file to show instead; `index` is where the shown file
+    sits in the new list, or the slot it left behind when it is gone.
+    """
     if message:
         status(message)
     previous_index = max(0, st.index())
@@ -187,13 +191,15 @@ def refresh_listing(view, st, message=None):
         if not view.is_valid():
             return
         st.files = files
-        index = state.find_change(files, path)
-        if index >= 0:
-            show_file(view, st, files[index])
-        elif files:
-            show_file(view, st, files[min(previous_index, len(files) - 1)])
-        else:
+        if not files:
             render.render_message(view, st, "No uncommitted changes in {}".format(st.repo))
+            return
+        index = state.find_change(files, path)
+        if index < 0:
+            # the file left the list: whatever moved up into its slot takes over
+            index = min(previous_index, len(files) - 1)
+        chosen = pick(files, index) if pick else None
+        show_file(view, st, chosen if chosen is not None else files[index])
 
     run_async(lambda: git.changed_files(st.repo), done)
 
@@ -307,8 +313,11 @@ def _act_help(view, window, st):
     render.show_help(view, st)
 
 
-def _git_action(verb, done_verb, operation, confirm=None):
-    """Action running `operation(repo, change)` on the shown working-tree file, then re-listing"""
+def _git_action(verb, done_verb, operation, confirm=None, pick=None):
+    """Action running `operation(repo, change)` on the shown working-tree file, then re-listing
+
+    `pick` is handed to refresh_listing to choose which file to show afterwards.
+    """
 
     def act(view, window, st):
         if st.in_commit or st.change is None:
@@ -317,7 +326,10 @@ def _git_action(verb, done_verb, operation, confirm=None):
         change = st.change
         if confirm is not None and not confirm(change):
             return
-        run_async(lambda: operation(st.repo, change), lambda _: refresh_listing(view, st, "{} {}".format(done_verb, change.path)))
+        run_async(
+            lambda: operation(st.repo, change),
+            lambda _: refresh_listing(view, st, "{} {}".format(done_verb, change.path), pick=pick),
+        )
 
     return act
 
@@ -332,6 +344,24 @@ def _confirm_discard(change):
             change.path
         )
     return sublime.ok_cancel_dialog(message, "Discard")
+
+
+def _next_unstaged(files, start):
+    """Index of the first unstaged file from `start` on, wrapping round; -1 when every file is staged"""
+    for offset in range(len(files)):
+        index = (start + offset) % len(files)
+        if not files[index].staged:
+            return index
+    return -1
+
+
+def _stage_next(files, index):
+    """After staging, the next unstaged file to show; None keeps the file the refresh would show"""
+    if not settings().get("stage_and_move_next_file", True):
+        return None
+    # the file just staged is staged now, so a scan starting on it moves off by itself
+    following = _next_unstaged(files, index)
+    return files[following] if following >= 0 else None
 
 
 def _act_refresh(view, window, st):
@@ -381,14 +411,13 @@ def _step_change(delta):
     def act(view, window, st):
         starts = [start for start, _ in st.blocks]
         if not starts:
-            status("no changes")
+            status("no changes to step through")
             return
         row = render.caret_index(view)
         position = bisect.bisect_right(starts, row) if delta > 0 else bisect.bisect_left(starts, row) - 1
-        wrapped = not 0 <= position < len(starts)
-        position %= len(starts)  # -1 is the last change, len(starts) the first
-        if wrapped:
+        if not 0 <= position < len(starts):
             render.flash(view)
+            position %= len(starts)  # -1 is the last change, len(starts) the first
         point = render.index_point(view, starts[position])
         view.sel().clear()
         view.sel().add(sublime.Region(point))
@@ -432,7 +461,7 @@ ACTIONS = {
     "commits": _act_commits,
     "close": _act_close,
     "help": _act_help,
-    "stage": _git_action("stage", "staged", git.stage),
+    "stage": _git_action("stage", "staged", git.stage, pick=_stage_next),
     "unstage": _git_action("unstage", "unstaged", git.unstage),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),
     "commit": _act_commit,

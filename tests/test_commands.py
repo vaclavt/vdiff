@@ -2,15 +2,35 @@ import pytest
 
 import sublime  # the stub, via conftest
 
-from vdiff import commands, git, state
+from vdiff import commands, git, state, utils
 
 
 def change(path, status="M"):
     return git.FileChange(path, status, False, 1, 1, None)
 
 
+def flagged(*flags):
+    """f0.py, f1.py ... with the given staged flags"""
+    return [git.FileChange("f{}.py".format(i), "M", flag, 1, 1, None) for i, flag in enumerate(flags)]
+
+
+def option(monkeypatch, name, value):
+    """Set a plugin setting for one test; the stub hands out one Settings dict per file"""
+    monkeypatch.setitem(sublime.load_settings(utils.SETTINGS_FILE), name, value)
+
+
 def flush_previews():
     """The stub runs set_timeout synchronously, so previews are already shown"""
+
+
+def at_change(blocks, row):
+    """A rendered view with `blocks` as its changes and the caret on `row`"""
+    view = sublime.View()
+    st = state.ViewState("/repo")
+    st.blocks = blocks
+    view.text = "\n" + "\n".join("l{}".format(i) for i in range(20))
+    view.sel().add(sublime.Region(commands.render.index_point(view, row)))
+    return view, st
 
 
 def test_esc_restores_previous_file_and_mode(monkeypatch):
@@ -83,18 +103,15 @@ def test_on_cancel_goes_back_to_commit_list(monkeypatch):
     assert back == [1] and st.sha is None
 
 
-def test_step_change_uses_blocks():
-    view = sublime.View()
-    st = state.ViewState("/repo")
-    st.blocks = [(2, 4), (7, 8)]
-    view.text = "\n" + "\n".join("l{}".format(i) for i in range(10))
-    view.sel().add(sublime.Region(commands.render.index_point(view, 0)))
+def test_step_change_uses_blocks(rings):
+    view, st = at_change([(2, 4), (7, 8)], 0)
     commands.ACTIONS["next_change"](view, None, st)
     assert commands.render.caret_index(view) == 2
     commands.ACTIONS["next_change"](view, None, st)
     assert commands.render.caret_index(view) == 7
     commands.ACTIONS["prev_change"](view, None, st)
-    assert commands.render.caret_index(view) == 2
+    # stepping inside the list stays silent
+    assert commands.render.caret_index(view) == 2 and rings == []
 
 
 def test_file_items_annotations():
@@ -151,7 +168,7 @@ def test_j_and_k_move_the_caret_one_line():
 
 def staged_state(*flags):
     st = state.ViewState("/repo")
-    st.files = [git.FileChange("f{}.py".format(i), "M", flag, 1, 1, None) for i, flag in enumerate(flags)]
+    st.files = flagged(*flags)
     return st
 
 
@@ -273,7 +290,7 @@ def commit_panel(files):
 
 
 def numbered(count=5):
-    return [git.FileChange("f{}.py".format(i), "M", False, 1, 1, None) for i in range(count)]
+    return flagged(*(False,) * count)
 
 
 def requested_path(queue):
@@ -405,16 +422,6 @@ def test_first_step_without_a_shown_file_picks_an_end(loading, rings):
     assert rings == []
 
 
-def at_change(blocks, row):
-    """A rendered view with `blocks` as its changes and the caret on `row`"""
-    view = sublime.View()
-    st = state.ViewState("/repo")
-    st.blocks = blocks
-    view.text = "\n" + "\n".join("l{}".format(i) for i in range(20))
-    view.sel().add(sublime.Region(commands.render.index_point(view, row)))
-    return view, st
-
-
 def test_next_change_wraps_past_the_last(rings):
     view, st = at_change([(2, 4), (7, 8)], 7)
 
@@ -429,14 +436,6 @@ def test_prev_change_wraps_before_the_first(rings):
     assert commands.render.caret_index(view) == 7 and len(rings) == 1
 
 
-def test_stepping_inside_the_changes_does_not_ring(rings):
-    view, st = at_change([(2, 4), (7, 8), (12, 13)], 7)
-
-    commands.ACTIONS["next_change"](view, None, st)
-    commands.ACTIONS["prev_change"](view, None, st)
-    assert commands.render.caret_index(view) == 7 and rings == []
-
-
 def test_single_change_rings_and_stays_put(rings):
     view, st = at_change([(2, 4)], 2)
 
@@ -449,5 +448,73 @@ def test_a_file_without_changes_neither_moves_nor_rings(rings):
     view, st = at_change([], 3)
 
     commands.ACTIONS["next_change"](view, None, st)
-    commands.ACTIONS["prev_change"](view, None, st)
     assert commands.render.caret_index(view) == 3 and rings == []
+
+
+# --- staging moves on to the next unstaged file -----------------------------
+
+
+def press(monkeypatch, action, before, path, after):
+    """Run `action` on `path` of `before`; git then reports `after`. Returns the paths shown
+
+    ACTIONS captured git.stage and friends when the table was built, so the subprocess is stubbed
+    one level down, at git.run; that keeps the real wiring of the action under test.
+    """
+    shown = []
+    monkeypatch.setattr(commands.git, "run", lambda repo, args, ok_codes=(0,): "")
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: after)
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: shown.append(c.path))
+    view, window, st = at_file(before, path)
+    commands.ACTIONS[action](view, window, st)
+    return shown
+
+
+def test_next_unstaged_scans_forward_and_wraps():
+    files = flagged(False, True, False, True)
+    assert commands._next_unstaged(files, 1) == 2
+    assert commands._next_unstaged(files, 2) == 2  # the slot we count from counts itself
+    assert commands._next_unstaged(files, 3) == 0  # wraps past the end
+    assert commands._next_unstaged(flagged(True, True), 0) == -1
+
+
+def test_staging_moves_to_the_next_unstaged_file(monkeypatch):
+    shown = press(monkeypatch, "stage", flagged(True, False, True, False), "f1.py", flagged(True, True, True, False))
+    assert shown == ["f3.py"]
+
+
+def test_staging_wraps_to_an_unstaged_file_above(monkeypatch):
+    shown = press(monkeypatch, "stage", flagged(False, True, False), "f2.py", flagged(False, True, True))
+    assert shown == ["f0.py"]
+
+
+def test_staging_the_last_unstaged_file_stays_put(monkeypatch):
+    shown = press(monkeypatch, "stage", flagged(True, False), "f1.py", flagged(True, True))
+    assert shown == ["f1.py"]
+
+
+def test_staging_a_file_that_leaves_the_list_counts_from_its_slot(monkeypatch):
+    # staging can make the entry vanish (the change was identical to HEAD); f2.py takes the slot
+    before = flagged(True, False, False)
+    after = [before[0], before[2]]
+    shown = press(monkeypatch, "stage", before, "f1.py", after)
+    assert shown == ["f2.py"]
+
+
+def test_staging_does_not_move_when_the_option_is_off(monkeypatch):
+    option(monkeypatch, "stage_and_move_next_file", False)
+    shown = press(monkeypatch, "stage", flagged(True, False, False), "f1.py", flagged(True, True, False))
+    assert shown == ["f1.py"]
+
+
+def test_unstage_and_discard_do_not_move(monkeypatch):
+    option(monkeypatch, "confirm_discard", False)
+    files = flagged(True, True, False)
+    assert press(monkeypatch, "unstage", files, "f1.py", flagged(True, False, False)) == ["f1.py"]
+    assert press(monkeypatch, "discard", files, "f1.py", flagged(True, False, False)) == ["f1.py"]
+
+
+def test_staging_the_only_file_leaves_an_empty_listing(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands.render, "render_message", lambda view, st, text: messages.append(text))
+    assert press(monkeypatch, "stage", flagged(False), "f0.py", []) == []
+    assert messages == ["No uncommitted changes in /repo"]
