@@ -206,6 +206,71 @@ def test_commit_prompts_then_commits(monkeypatch):
     assert refreshed == ["committed 2 files"]
 
 
+def prompt_amend(monkeypatch, st, head="last subject"):
+    """Press m; git reports `head` as HEAD's message. Returns (window, amended, refreshed)"""
+    amended, refreshed = [], []
+    monkeypatch.setattr(commands.git, "head_message", lambda repo: head)
+    monkeypatch.setattr(
+        commands.git, "amend", lambda repo, message, allow_empty=False: amended.append((repo, message, allow_empty))
+    )
+    monkeypatch.setattr(commands, "refresh_listing", lambda view, st, message=None: refreshed.append(message))
+    window = sublime.Window()
+    commands.ACTIONS["amend"](sublime.View(), window, st)
+    return window, amended, refreshed
+
+
+def test_amend_refuses_commit_mode(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands.sublime, "status_message", lambda m: messages.append(m))
+    st = staged_state(True)
+    st.enter("abc", None)
+
+    window, amended, _ = prompt_amend(monkeypatch, st)
+    assert messages[-1] == "vDiff: amend works on uncommitted changes only"
+    assert window.input is None and amended == []
+
+
+def test_amend_prefills_the_subject_with_the_caret_at_its_end(monkeypatch):
+    window, amended, _ = prompt_amend(monkeypatch, staged_state(True), head="fix the parser")
+
+    caption, initial, _, _, on_cancel = window.input
+    assert caption == "Amend message" and initial == "fix the parser" and amended == []
+    # the panel selects its prefill; the caret must sit after it, ready to type
+    assert list(window.input_view.sel()) == [sublime.Region(len("fix the parser"))]
+    # Esc is a no-op: there is no cancel callback to run
+    assert on_cancel is None
+
+
+def test_amend_offers_the_subject_and_keeps_the_rest_verbatim(monkeypatch):
+    head = "typo hree\n\nCloses #12.\n\n- a\n- b"
+    window, amended, refreshed = prompt_amend(monkeypatch, staged_state(True, False, True), head=head)
+
+    assert window.input[1] == "typo hree"  # only the first line is offered for editing
+    window.input[2]("typo here")
+    # everything below the first line comes back untouched, and staged files keep git's guard
+    assert amended == [("/repo", "typo here" + head[len("typo hree") :], False)]
+    assert refreshed == ["amended the last commit with 2 files"]
+
+
+def test_amend_rewords_with_nothing_staged(monkeypatch):
+    window, amended, refreshed = prompt_amend(monkeypatch, staged_state(False, False))
+
+    window.input[2]("just a reword")
+    # a reword alone opts out of git's refusal, so an empty commit can still be renamed
+    assert amended == [("/repo", "just a reword", True)]
+    assert refreshed == ["amended the last commit"]
+
+
+def test_amend_with_an_empty_message_does_nothing(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands.sublime, "status_message", lambda m: messages.append(m))
+    window, amended, refreshed = prompt_amend(monkeypatch, staged_state(True))
+
+    window.input[2]("   ")
+    assert amended == [] and refreshed == []
+    assert messages[-1] == "vDiff: amend cancelled: empty message"
+
+
 def test_commit_message_counts_one_file(monkeypatch):
     refreshed = []
     monkeypatch.setattr(commands.git, "commit", lambda repo, message: None)

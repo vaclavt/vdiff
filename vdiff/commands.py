@@ -6,7 +6,7 @@ import sublime
 import sublime_plugin
 
 from . import git, parse, render, state
-from .utils import run_async, settings, status
+from .utils import file_count, run_async, settings, status
 
 # quick-panel kind per status letter: colour + the letter; the description comes from git.STATUS_NAMES
 STATUS_COLOURS = {
@@ -132,8 +132,8 @@ def commit_items(commits):
         annotation = c.short
         if c.files is not None:
             # merges and empty commits have no diffstat, so they show the hash alone
-            annotation = "{} {} changed  -{} +{}  {}".format(
-                c.files, "file" if c.files == 1 else "files", c.deletions, c.insertions, c.short
+            annotation = "{} changed  -{} +{}  {}".format(
+                file_count(c.files), c.deletions, c.insertions, c.short
             )
         subject = c.subject or "(no subject)"
         budget = max(COMMIT_ROW_WIDTH - len(annotation), MIN_SUBJECT_WIDTH)
@@ -440,13 +440,47 @@ def _act_commit(view, window, st):
         if not message.strip():
             status("commit cancelled: empty message")
             return
-        noun = "file" if len(staged) == 1 else "files"
         run_async(
             lambda: git.commit(st.repo, message),
-            lambda _: refresh_listing(view, st, "committed {} {}".format(len(staged), noun)),
+            lambda _: refresh_listing(view, st, "committed {}".format(file_count(len(staged)))),
         )
 
     window.show_input_panel("Commit message", "", on_done, None, None)
+
+
+def _act_amend(view, window, st):
+    """Rewrite HEAD's message in an input panel, folding in whatever is staged; Esc there cancels
+
+    The panel is one line, so only the subject is offered; the rest of the message rides along
+    verbatim. Nothing staged is fine - then the amend is a pure reword.
+    """
+    if st.in_commit:
+        status("amend works on uncommitted changes only")
+        return
+    staged = [c for c in st.files if c.staged]
+
+    def prompt(message):
+        subject, newline, body = message.partition("\n")
+
+        def on_done(text):
+            if not text.strip():
+                status("amend cancelled: empty message")
+                return
+            done = "amended the last commit"
+            if staged:
+                done += " with {}".format(file_count(len(staged)))
+            run_async(
+                # nothing staged makes this a pure reword, which git refuses on an empty commit
+                lambda: git.amend(st.repo, text + newline + body, allow_empty=not staged),
+                lambda _: refresh_listing(view, st, done),
+            )
+
+        panel = window.show_input_panel("Amend message", subject, on_done, None, None)
+        # the panel selects the whole prefill; the caret belongs after it, ready to type
+        panel.sel().clear()
+        panel.sel().add(sublime.Region(panel.size()))
+
+    run_async(lambda: git.head_message(st.repo), prompt)
 
 
 def _move_line(forward):
@@ -465,6 +499,7 @@ ACTIONS = {
     "unstage": _git_action("unstage", "unstaged", git.unstage),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),
     "commit": _act_commit,
+    "amend": _act_amend,
     "refresh": _act_refresh,
     "open": _act_open,
     "next_file": _step_file(1),

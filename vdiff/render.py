@@ -11,7 +11,7 @@ import sublime_plugin
 from . import parse
 from .git import STATUS_NAMES
 from .state import VIEW_FLAG
-from .utils import settings
+from .utils import file_count, settings
 
 LOG = logging.getLogger("vdiff")
 
@@ -74,7 +74,8 @@ KEY_GROUPS = [
         Key("s", "stage", "stage", ("stage",)),
         Key("u", "unstage", "unstage", ("unstage",)),
         Key("d", "discard", "discard", ("discard",)),
-        Key("C m", "commit the staged files", "commit", ("commit",)),
+        Key("C", "commit the staged files", "commit", ("commit",)),
+        Key("m", "amend the last commit", "amend", ("amend",)),
     ]),
     ("View", True, [
         Key("r", "refresh", "refresh", ("refresh",)),
@@ -335,8 +336,8 @@ def _commit_parts(st):
     insertions = sum(c.insertions or 0 for c in st.files)
     deletions = sum(c.deletions or 0 for c in st.files)
     parts.append(
-        '{} {} changed <span class="del">-{}</span> <span class="ins">+{}</span>'.format(
-            len(st.files), "file" if len(st.files) == 1 else "files", deletions, insertions
+        '{} changed <span class="del">-{}</span> <span class="ins">+{}</span>'.format(
+            file_count(len(st.files)), deletions, insertions
         )
     )
     if info:

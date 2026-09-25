@@ -27,6 +27,11 @@ def apply_git_binary():
     git.GIT_BINARY = settings().get("git_binary") or "git"
 
 
+def file_count(count):
+    """'1 file' / '3 files' for a message"""
+    return "{} {}".format(count, "file" if count == 1 else "files")
+
+
 def status(message):
     """Status-bar message with the plugin prefix"""
     sublime.status_message("vDiff: {}".format(message))

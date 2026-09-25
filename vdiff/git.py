@@ -252,6 +252,20 @@ def commit(repo, message):
     run(repo, ["commit", "-m", message])
 
 
+def head_message(repo):
+    """HEAD's whole message, exactly as git stores it"""
+    return run(repo, ["log", "-1", "--format=%B"]).strip("\n")
+
+
+def amend(repo, message, allow_empty=False):
+    """Rewrite HEAD with `message`, folding in whatever is staged
+
+    `allow_empty` for a pure reword: git otherwise refuses an amend whose result carries no change,
+    which would fail on a commit that happens to be empty.
+    """
+    run(repo, ["commit", "--amend"] + (["--allow-empty"] if allow_empty else []) + ["-m", message])
+
+
 def unstage(repo, change):
     """Move the file's staged changes back to the working tree"""
     if has_head(repo):

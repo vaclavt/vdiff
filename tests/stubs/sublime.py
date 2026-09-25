@@ -89,6 +89,7 @@ class Window:
     def __init__(self):
         self.panel = None
         self.input = None
+        self.input_view = None
         self.commands = []
 
     def focus_view(self, view):
@@ -102,7 +103,10 @@ class Window:
 
     def show_input_panel(self, caption, initial_text, on_done, on_change, on_cancel):
         self.input = (caption, initial_text, on_done, on_change, on_cancel)
-        return View()
+        self.input_view = View(initial_text)
+        # the real panel hands its prefill back selected, which is why callers clear the selection
+        self.input_view.sel().add(Region(0, len(initial_text)))
+        return self.input_view
 
 
 class View:

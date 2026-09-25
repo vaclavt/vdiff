@@ -134,7 +134,7 @@ def test_help_popup_lists_every_key():
     assert view.is_popup_visible()
     for group in ("Navigate", "Panels", "Actions", "View"):
         assert ">{}<".format(group) in html
-    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C m", "r", "?", "esc"):
+    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C", "m", "r", "?", "esc"):
         assert ">{}<".format(keys) in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
@@ -152,9 +152,9 @@ def test_help_popup_dims_file_actions_in_commit_mode():
     _, html = help_popup(st)
 
     assert "uncommitted only" in html
-    assert html.count('class="dim"') == 4
+    assert html.count('class="dim"') == 5
     assert 'href="stage"' not in html and 'href="unstage"' not in html and 'href="discard"' not in html
-    assert 'href="commit"' not in html
+    assert 'href="commit"' not in html and 'href="amend"' not in html
     # everything that still applies stays clickable
     assert 'href="files"' in html and 'href="open"' in html and 'href="refresh"' in html
 

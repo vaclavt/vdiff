@@ -200,3 +200,72 @@ def test_commit_without_staged_files_raises(repo):
     with pytest.raises(git.GitError) as info:
         git.commit(repo, "nothing to record")
     assert info.value.code != 0
+
+
+def message(repo):
+    """HEAD's raw message, as git stores it"""
+    return git.run(repo, ["log", "-1", "--format=%B"]).strip("\n")
+
+
+def test_head_message_returns_the_whole_message(repo):
+    assert git.head_message(repo) == "initial"
+
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "second", "-m", "body text\nsecond line")
+    assert git.head_message(repo) == "second\n\nbody text\nsecond line"
+
+
+def test_amend_keeps_everything_below_the_first_line_byte_for_byte(repo):
+    body = "Closes #12.\n\n- a\n- b"
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "typo hree", "-m", body)
+    before = git.run(repo, ["rev-list", "--count", "HEAD"])
+    _, newline, rest = git.head_message(repo).partition("\n")
+
+    git.amend(repo, "typo here" + newline + rest, allow_empty=True)
+
+    # the paragraph the user never touched comes back exactly as git stored it
+    assert message(repo) == "typo here\n\n" + body
+    # an amend rewrites HEAD, it does not add a commit
+    assert git.run(repo, ["rev-list", "--count", "HEAD"]) == before
+
+
+def test_amend_without_a_body_leaves_a_one_line_message(repo):
+    git.amend(repo, "reworded")
+    assert message(repo) == "reworded"
+
+
+def test_amend_rewords_an_empty_commit(repo):
+    # git refuses an amend that leaves nothing behind unless --allow-empty says otherwise
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "marker")
+    git.amend(repo, "marker, reworded", allow_empty=True)
+    assert message(repo) == "marker, reworded"
+
+
+def test_amend_that_would_empty_the_commit_is_refused(repo):
+    # folding staged files in keeps git's guard: only a reword opts out of it
+    write(repo, "new.py", "temporary\n")
+    sh(repo, "add", "new.py")
+    sh(repo, "commit", "-q", "-m", "add new.py")
+    sh(repo, "rm", "-q", "new.py")
+
+    with pytest.raises(git.GitError):
+        git.amend(repo, "add new.py")
+
+
+def test_amend_folds_staged_files_into_head(repo):
+    write(repo, "a.py", "amended\n")
+    changes = {c.path: c for c in git.changed_files(repo)}
+    git.stage(repo, changes["a.py"])
+    before = git.run(repo, ["rev-list", "--count", "HEAD"])
+
+    git.amend(repo, "initial, with a.py")
+
+    assert git.run(repo, ["rev-list", "--count", "HEAD"]) == before
+    assert not git.changed_files(repo)
+    assert message(repo) == "initial, with a.py"
+
+
+def test_head_message_without_a_commit_raises(tmp_path):
+    fresh = str(tmp_path)
+    sh(fresh, "init", "-q", "-b", "main")
+    with pytest.raises(git.GitError):
+        git.head_message(fresh)

@@ -29,7 +29,7 @@
       "context": [{"key": "setting.vdiff_view"}] },
     { "keys": ["C"], "command": "vdiff_action", "args": {"action": "commit"},
       "context": [{"key": "setting.vdiff_view"}] },
-    { "keys": ["m"], "command": "vdiff_action", "args": {"action": "commit"},
+    { "keys": ["m"], "command": "vdiff_action", "args": {"action": "amend"},
       "context": [{"key": "setting.vdiff_view"}] },
     { "keys": ["?"], "command": "vdiff_action", "args": {"action": "help"},
       "context": [{"key": "setting.vdiff_view"}] },
