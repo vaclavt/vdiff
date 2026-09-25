@@ -1,0 +1,30 @@
+macbook: claude --resume 275357c1-ce75-41de-a85a-4e06288bc8f0
+
+macstudio: claude --resume ca7e7e5d-0ad3-45e5-bd67-e5dbd3af1b4c
+
+
+
+Add amend action. Similar to commit but commit --amend. When user has chosen amend open commit message input field with last commit message and cursor on the end of message and user can change commit message or confirm it by pressing Enter. When User presses Esc the commmit amend is canceled.
+Amend action is available under key "m"
+
+
+
+- in Files in first line there is 2 staged, 2 unstaged - add there deletions and insertions
+
+- Add stash action .. 
+
+- Add (commit) summary view (just changes across files with 5 lines before and after change?)
+
+- visual bell blinking time setting
+
+- When reviewing changes in python files the deleted and inserted lines have red and green background but the text on these lines has no syntax highlighting (it's white on darker theme). How difficult would be to add syntax highlighting to changed lines and keep red and green background?
+(tady full syntax coloring je hard, nabizi se barevnej gutter, nebo barevne podtrzeni)
+
+- v detailu komitu when pressing n and p the second line is nonsence
+
+- add type hints
+
+- add tags into commits list (and branches?)
+
+- commit messages are oneline. What are options for multiline editing?
+
