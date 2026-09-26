@@ -1,0 +1,7 @@
+{
+    "$schema": "sublime://packagecontrol.io/schemas/channel",
+    "schema_version": "4.0.0",
+    "repositories": [
+        "https://raw.githubusercontent.com/vaclavt/vdiff/main/repository.json"
+    ]
+}
