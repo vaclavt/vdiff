@@ -32,7 +32,7 @@ class Region:
         return (self.a, self.b) == (other.a, other.b)
 
     def __repr__(self):
-        return "Region({}, {})".format(self.a, self.b)
+        return f"Region({self.a}, {self.b})"
 
 
 class Settings(dict):
@@ -240,7 +240,13 @@ def find_syntax_for_file(path, first_line=""):
 
 
 def ui_info():
-    return {"system": {"style": "dark"}, "color_scheme": {"value": "Mariana.sublime-color-scheme", "resolved_value": "Packages/Color Scheme - Default/Mariana.sublime-color-scheme"}}
+    return {
+        "system": {"style": "dark"},
+        "color_scheme": {
+            "value": "Mariana.sublime-color-scheme",
+            "resolved_value": "Packages/Color Scheme - Default/Mariana.sublime-color-scheme",
+        },
+    }
 
 
 def decode_value(text):

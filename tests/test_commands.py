@@ -11,7 +11,7 @@ def change(path, status="M"):
 
 def flagged(*flags):
     """f0.py, f1.py ... with the given staged flags"""
-    return [git.FileChange("f{}.py".format(i), "M", flag, 1, 1, None) for i, flag in enumerate(flags)]
+    return [git.FileChange(f"f{i}.py", "M", flag, 1, 1, None) for i, flag in enumerate(flags)]
 
 
 def option(monkeypatch, name, value):
@@ -28,7 +28,7 @@ def at_change(blocks, row):
     view = sublime.View()
     st = state.ViewState("/repo")
     st.blocks = blocks
-    view.text = "\n" + "\n".join("l{}".format(i) for i in range(20))
+    view.text = "\n" + "\n".join(f"l{i}" for i in range(20))
     view.sel().add(sublime.Region(commands.render.index_point(view, row)))
     return view, st
 

@@ -29,12 +29,12 @@ def apply_git_binary():
 
 def file_count(count):
     """'1 file' / '3 files' for a message"""
-    return "{} {}".format(count, "file" if count == 1 else "files")
+    return f'{count} {"file" if count == 1 else "files"}'
 
 
 def status(message):
     """Status-bar message with the plugin prefix"""
-    sublime.status_message("vDiff: {}".format(message))
+    sublime.status_message(f"vDiff: {message}")
 
 
 def run_async(work, done):

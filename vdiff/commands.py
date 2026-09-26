@@ -120,7 +120,7 @@ def file_items(files):
         if None in (change.insertions, change.deletions):
             annotation = "binary"
         else:
-            annotation = "-{} +{}".format(change.deletions, change.insertions)
+            annotation = f"-{change.deletions} +{change.insertions}"
         items.append(sublime.QuickPanelItem(change.path, details, annotation, kind))
     return items
 
@@ -132,14 +132,12 @@ def commit_items(commits):
         annotation = c.short
         if c.files is not None:
             # merges and empty commits have no diffstat, so they show the hash alone
-            annotation = "{} changed  -{} +{}  {}".format(
-                file_count(c.files), c.deletions, c.insertions, c.short
-            )
+            annotation = f"{file_count(c.files)} changed  -{c.deletions} +{c.insertions}  {c.short}"
         subject = c.subject or "(no subject)"
         budget = max(COMMIT_ROW_WIDTH - len(annotation), MIN_SUBJECT_WIDTH)
         if len(subject) > budget:
             subject = subject[: budget - 2] + ".."
-        items.append(sublime.QuickPanelItem(subject, "{} · {}".format(c.author, c.date), annotation, COMMIT_KIND))
+        items.append(sublime.QuickPanelItem(subject, f"{c.author} · {c.date}", annotation, COMMIT_KIND))
     return items
 
 
@@ -192,7 +190,7 @@ def refresh_listing(view, st, message=None, pick=None):
             return
         st.files = files
         if not files:
-            render.render_message(view, st, "No uncommitted changes in {}".format(st.repo))
+            render.render_message(view, st, f"No uncommitted changes in {st.repo}")
             return
         index = state.find_change(files, path)
         if index < 0:
@@ -227,10 +225,10 @@ class VdiffFilesCommand(sublime_plugin.WindowCommand):
                 return
             kept = st.enter()
             if not files:
-                render.render_message(view, st, "No uncommitted changes in {}".format(st.repo))
+                render.render_message(view, st, f"No uncommitted changes in {st.repo}")
                 status("no uncommitted changes")
                 return
-            placeholder = "Changed files in {}".format(os.path.basename(st.repo))
+            placeholder = f"Changed files in {os.path.basename(st.repo)}"
             show_files_panel(window, view, st, files, kept, placeholder=placeholder)
 
         run_async(lambda: git.changed_files(st.repo), done)
@@ -281,13 +279,13 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
             info, files = result
             kept = st.enter(info.sha, info)
             if not files:
-                render.render_message(view, st, "Commit {} touches no files".format(info.short))
+                render.render_message(view, st, f"Commit {info.short} touches no files")
                 return
 
             def back():
                 window.run_command("vdiff_commits", {"selected": index})
 
-            placeholder = "{} · {}".format(info.short, info.subject)
+            placeholder = f"{info.short} · {info.subject}"
             on_cancel = back if index is not None else None
             show_files_panel(window, view, st, files, kept, on_cancel=on_cancel, placeholder=placeholder)
 
@@ -321,14 +319,14 @@ def _git_action(verb, done_verb, operation, confirm=None, pick=None):
 
     def act(view, window, st):
         if st.in_commit or st.change is None:
-            status("{} works on uncommitted changes only".format(verb))
+            status(f"{verb} works on uncommitted changes only")
             return
         change = st.change
         if confirm is not None and not confirm(change):
             return
         run_async(
             lambda: operation(st.repo, change),
-            lambda _: refresh_listing(view, st, "{} {}".format(done_verb, change.path), pick=pick),
+            lambda _: refresh_listing(view, st, f"{done_verb} {change.path}", pick=pick),
         )
 
     return act
@@ -338,10 +336,11 @@ def _confirm_discard(change):
     if not settings().get("confirm_discard", True):
         return True
     if change.status == "?":
-        message = "Delete the untracked file {}?\n\nThis cannot be undone.".format(change.path)
+        message = f"Delete the untracked file {change.path}?\n\nThis cannot be undone."
     else:
-        message = "Discard all changes to {}?\n\nThe file goes back to its last committed version. This cannot be undone.".format(
-            change.path
+        message = (
+            f"Discard all changes to {change.path}?\n\n"
+            "The file goes back to its last committed version. This cannot be undone."
         )
     return sublime.ok_cancel_dialog(message, "Discard")
 
@@ -378,10 +377,10 @@ def _act_open(view, window, st):
         return
     path = os.path.join(st.repo, st.change.path)
     if not os.path.exists(path):
-        status("{} does not exist in the working tree".format(st.change.path))
+        status(f"{st.change.path} does not exist in the working tree")
         return
     line = parse.line_for_open(st.lines, render.caret_index(view))
-    window.open_file("{}:{}".format(path, line), sublime.ENCODED_POSITION)
+    window.open_file(f"{path}:{line}", sublime.ENCODED_POSITION)
 
 
 def _step_file(delta):
@@ -442,7 +441,7 @@ def _act_commit(view, window, st):
             return
         run_async(
             lambda: git.commit(st.repo, message),
-            lambda _: refresh_listing(view, st, "committed {}".format(file_count(len(staged)))),
+            lambda _: refresh_listing(view, st, f"committed {file_count(len(staged))}"),
         )
 
     window.show_input_panel("Commit message", "", on_done, None, None)
@@ -468,7 +467,7 @@ def _act_amend(view, window, st):
                 return
             done = "amended the last commit"
             if staged:
-                done += " with {}".format(file_count(len(staged)))
+                done += f" with {file_count(len(staged))}"
             run_async(
                 # nothing staged makes this a pure reword, which git refuses on an empty commit
                 lambda: git.amend(st.repo, text + newline + body, allow_empty=not staged),
@@ -520,7 +519,7 @@ class VdiffActionCommand(sublime_plugin.TextCommand):
     def run(self, edit, action):
         act = ACTIONS.get(action)
         if act is None:
-            status("unknown action {}".format(action))
+            status(f"unknown action {action}")
             return
         st = state.get(self.view) or restore_view(self.view)
         act(self.view, self.view.window(), st)
@@ -558,7 +557,7 @@ def restore_view(view):
             if index >= 0:
                 show_file(view, st, files[index])
             else:
-                render.render_message(view, st, "{} has no uncommitted changes any more".format(path))
+                render.render_message(view, st, f"{path} has no uncommitted changes any more")
 
         run_async(lambda: git.changed_files(repo), done)
     return st

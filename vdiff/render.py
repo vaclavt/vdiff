@@ -60,33 +60,49 @@ FALLBACK_RULES = [
 Key = namedtuple("Key", "keys label short actions")
 
 KEY_GROUPS = [
-    ("Navigate", True, [
-        Key("] [", "next / previous change (wraps)", "change", ("next_change", "prev_change")),
-        Key("n p", "next / previous file (wraps)", "file", ("next_file", "prev_file")),
-        Key("o \u23ce", "open the real file at this line", "open", ("open",)),
-        Key("j k", "down / up one line (vim)", "", ("line_down", "line_up")),
-    ]),
-    ("Panels", True, [
-        Key("f", "changed files", "files", ("files",)),
-        Key("c", "recent commits", "commits", ("commits",)),
-    ]),
-    ("Actions", False, [
-        Key("s", "stage", "stage", ("stage",)),
-        Key("u", "unstage", "unstage", ("unstage",)),
-        Key("d", "discard", "discard", ("discard",)),
-        Key("C", "commit the staged files", "commit", ("commit",)),
-        Key("m", "amend the last commit", "amend", ("amend",)),
-    ]),
-    ("View", True, [
-        Key("r", "refresh", "refresh", ("refresh",)),
-        Key("?", "this list", "keys", ("help",)),
-        Key("esc", "close the view", "", ("close",)),
-    ]),
+    (
+        "Navigate",
+        True,
+        [
+            Key("] [", "next / previous change (wraps)", "change", ("next_change", "prev_change")),
+            Key("n p", "next / previous file (wraps)", "file", ("next_file", "prev_file")),
+            Key("o \u23ce", "open the real file at this line", "open", ("open",)),
+            Key("j k", "down / up one line (vim)", "", ("line_down", "line_up")),
+        ],
+    ),
+    (
+        "Panels",
+        True,
+        [
+            Key("f", "changed files", "files", ("files",)),
+            Key("c", "recent commits", "commits", ("commits",)),
+        ],
+    ),
+    (
+        "Actions",
+        False,
+        [
+            Key("s", "stage", "stage", ("stage",)),
+            Key("u", "unstage", "unstage", ("unstage",)),
+            Key("d", "discard", "discard", ("discard",)),
+            Key("C", "commit the staged files", "commit", ("commit",)),
+            Key("m", "amend the last commit", "amend", ("amend",)),
+        ],
+    ),
+    (
+        "View",
+        True,
+        [
+            Key("r", "refresh", "refresh", ("refresh",)),
+            Key("?", "this list", "keys", ("help",)),
+            Key("esc", "close the view", "", ("close",)),
+        ],
+    ),
 ]
 
 KEYS = [key for _, _, group in KEY_GROUPS for key in group]
 
-KEY_HINTS = "   ".join("{} {}".format(k.keys, k.short) for k in KEYS if k.short)
+KEY_HINTS = "   ".join(f"{k.keys} {k.short}" for k in KEYS if k.short)
 
 # the popup font is the editor's, so the key column is padded to a fixed width in characters
 _KEY_WIDTH = max(len(k.keys) for k in KEYS)
@@ -242,7 +258,7 @@ def render(view, st):
             view.add_regions(KEY_INS_CHAR, ins_chars, SCOPE_INS_CHAR, flags=sublime.DRAW_NO_OUTLINE)
 
     ins, dele = parse.counts(lines)
-    _finish(view, st, ins, dele, "⟐ {}".format(os.path.basename(st.change.path)))
+    _finish(view, st, ins, dele, f"⟐ {os.path.basename(st.change.path)}")
     view.sel().clear()
     view.sel().add(sublime.Region(index_point(view, 0)))
     view.set_viewport_position((0, 0), False)
@@ -311,6 +327,11 @@ def _char_regions(lines, blocks, starts):
     return deleted, inserted
 
 
+def _totals(files):
+    """Summed numstat counts; binary files carry None counts and add nothing"""
+    return sum(c.insertions or 0 for c in files), sum(c.deletions or 0 for c in files)
+
+
 def _summary_html(st):
     """Line above the header: the whole commit on one line, or how much of the tree is staged"""
     if not st.files and not st.commit:
@@ -320,8 +341,12 @@ def _summary_html(st):
     else:
         # staged means "has something staged": a partially staged file counts as staged only
         staged = sum(1 for c in st.files if c.staged)
-        text = "{} staged, {} unstaged".format(staged, len(st.files) - staged)
-    return '<div class="summary">{}</div>'.format(text)
+        insertions, deletions = _totals(st.files)
+        text = (
+            f"{staged} staged, {len(st.files) - staged} unstaged"
+            f' · <span class="del">-{deletions}</span> <span class="ins">+{insertions}</span>'
+        )
+    return f'<div class="summary">{text}</div>'
 
 
 def _commit_parts(st):
@@ -329,22 +354,17 @@ def _commit_parts(st):
     info = st.commit
     parts = []
     if info:
-        parts.append('<span class="hash">{}</span>'.format(html.escape(info.short)))
+        parts.append(f'<span class="hash">{html.escape(info.short)}</span>')
         parts.append(html.escape(info.author))
-        parts.append('<span class="when">{}</span>'.format(html.escape(info.date)))
-    # binary files carry None counts but still changed, so they count toward the file total
-    insertions = sum(c.insertions or 0 for c in st.files)
-    deletions = sum(c.deletions or 0 for c in st.files)
-    parts.append(
-        '{} changed <span class="del">-{}</span> <span class="ins">+{}</span>'.format(
-            file_count(len(st.files)), deletions, insertions
-        )
-    )
+        parts.append(f'<span class="when">{html.escape(info.date)}</span>')
+    # binary files add nothing to the line totals but still count toward the file total
+    insertions, deletions = _totals(st.files)
+    parts.append(f"{file_count(len(st.files))} changed" f' <span class="del">-{deletions}</span> <span class="ins">+{insertions}</span>')
     if info:
         message = html.escape(info.subject)
         body = info.body.strip().splitlines()
         if body:
-            message += ' <span class="body">— {}</span>'.format(html.escape(body[0]))
+            message += f' <span class="body">— {html.escape(body[0])}</span>'
         parts.append(message)
     return parts
 
@@ -355,14 +375,14 @@ def header_html(st, ins, dele):
     if change is None:
         title = '<span class="path">vDiff</span>'
     else:
-        title = '<span class="path">{}</span>'.format(html.escape(change.path))
+        title = f'<span class="path">{html.escape(change.path)}</span>'
         if change.old_path:
-            title += ' <span class="old">← {}</span>'.format(html.escape(change.old_path))
-        title += '&nbsp;&nbsp;<span class="del">-{}</span> <span class="ins">+{}</span>'.format(dele, ins)
+            title += f' <span class="old">← {html.escape(change.old_path)}</span>'
+        title += f'&nbsp;&nbsp;<span class="del">-{dele}</span> <span class="ins">+{ins}</span>'
         if not st.in_commit:
             state = "staged" if change.staged else STATUS_NAMES.get(change.status, "")
             if state:
-                title += '&nbsp;&nbsp;<span class="state">{}</span>'.format(state)
+                title += f'&nbsp;&nbsp;<span class="state">{state}</span>'
 
     actions = []
     if change is not None and not st.in_commit:
@@ -375,8 +395,9 @@ def header_html(st, ins, dele):
     actions.append('<a href="commits">Commits</a>')
     actions.append('<a href="help" title="keys">?</a>')
 
-    return '<body id="vdiff-header"><style>{}</style>{}<div>{}<span class="actions">{}</span></div></body>'.format(
-        HEADER_CSS, _summary_html(st), title, "".join(actions)
+    return (
+        f'<body id="vdiff-header"><style>{HEADER_CSS}</style>{_summary_html(st)}'
+        f'<div>{title}<span class="actions">{"".join(actions)}</span></div></body>'
     )
 
 
@@ -406,17 +427,18 @@ def help_html(st):
         heading = html.escape(title)
         if dim:
             heading += ' <span class="note">uncommitted only</span>'
-        parts.append('<div class="group">{}</div>'.format(heading))
+        parts.append(f'<div class="group">{heading}</div>')
         # one class per element: a compound selector would silently drop the rest of HELP_CSS
         row_class, key_class = ("dim", "kdim") if dim else ("row", "k")
         for key in group:
-            row = '<span class="{}">{}</span>{}{}'.format(
-                key_class, html.escape(key.keys), "&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2), html.escape(key.label)
+            row = (
+                f'<span class="{key_class}">{html.escape(key.keys)}</span>'
+                f'{"&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2)}{html.escape(key.label)}'
             )
             if len(key.actions) == 1 and not dim:
-                row = '<a href="{}">{}</a>'.format(key.actions[0], row)
-            parts.append('<div class="{}">{}</div>'.format(row_class, row))
-    return '<body id="vdiff-help"><style>{}</style>{}</body>'.format(HELP_CSS, "".join(parts))
+                row = f'<a href="{key.actions[0]}">{row}</a>'
+            parts.append(f'<div class="{row_class}">{row}</div>')
+    return f'<body id="vdiff-help"><style>{HELP_CSS}</style>{"".join(parts)}</body>'
 
 
 def show_help(view, st):

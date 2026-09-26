@@ -133,9 +133,9 @@ def test_help_popup_lists_every_key():
 
     assert view.is_popup_visible()
     for group in ("Navigate", "Panels", "Actions", "View"):
-        assert ">{}<".format(group) in html
+        assert f">{group}<" in html
     for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C", "m", "r", "?", "esc"):
-        assert ">{}<".format(keys) in html
+        assert f">{keys}<" in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
     assert 'class="dim"' not in html and "uncommitted only" not in html
@@ -222,7 +222,7 @@ def test_minihtml_stylesheets_reject_unsupported_selectors():
         for rule in css.split("}"):
             head = rule.split("{")[0].strip()
             for selector in filter(None, (s.strip() for s in head.split(","))):
-                assert not unsupported.search(selector), "{}: {}".format(name, selector)
+                assert not unsupported.search(selector), f"{name}: {selector}"
 
 
 # --- header summary line ----------------------------------------------------
@@ -238,7 +238,26 @@ def test_summary_counts_staged_and_unstaged_files():
         git.FileChange("c.py", "?", False, 1, 0, None),
     ]
     render.render(view, st)
-    assert '<div class="summary">1 staged, 2 unstaged</div>' in header(view)
+    summary = header(view).split('<div class="summary">')[1].split("</div>")[0]
+
+    # the untracked file's whole content counts as insertions, the way git.changed_files records it
+    assert summary.startswith("1 staged, 2 unstaged · ")
+    assert '<span class="del">-2</span>' in summary and '<span class="ins">+3</span>' in summary
+
+
+def test_summary_totals_skip_binary_files_but_still_count_them():
+    view = sublime.View()
+    render.init_view(view)
+    st = make_state()
+    st.files = [
+        git.FileChange("a.py", "M", False, 4, 1, None),
+        git.FileChange("logo.png", "M", False, None, None, None),  # binary: no counts, still a file
+    ]
+    render.render(view, st)
+    summary = header(view).split('<div class="summary">')[1].split("</div>")[0]
+
+    assert summary.startswith("0 staged, 2 unstaged · ")
+    assert '<span class="del">-1</span>' in summary and '<span class="ins">+4</span>' in summary
 
 
 def test_summary_totals_a_commit_and_owns_the_date():

@@ -44,15 +44,13 @@ class GitError(Exception):
         self.stderr = stderr
         self.code = code
         first = stderr.strip().splitlines()
-        super().__init__(first[0] if first else "git exited with {}".format(code))
+        super().__init__(first[0] if first else f"git exited with {code}")
 
 
 def run(repo, args, ok_codes=(0,)):
     """Run git in `repo`, return stdout as text"""
     cmd = [GIT_BINARY, "-c", "core.quotepath=off", "--no-pager"] + list(args)
-    proc = subprocess.run(
-        cmd, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace"
-    )
+    proc = subprocess.run(cmd, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
     if proc.returncode not in ok_codes:
         raise GitError(proc.stderr, proc.returncode)
     return proc.stdout
@@ -201,7 +199,7 @@ def recent_commits(repo, count):
 def commit_with_files(repo, sha):
     """(CommitInfo, [FileChange]) of one commit vs its first parent, files sorted by path; two git calls"""
     show = ["show", "--first-parent", "-m", "-z"]
-    text = run(repo, show + ["--format={}%x00".format(_INFO_FORMAT), _DATE_FORMAT, "--name-status", sha])
+    text = run(repo, show + [f"--format={_INFO_FORMAT}%x00", _DATE_FORMAT, "--name-status", sha])
     # git terminates the header with its own NUL and a newline before the file list
     info_text, _, files_text = text.partition("\0")
     files_text = files_text.lstrip("\0\n")
@@ -222,7 +220,7 @@ def commit_with_files(repo, sha):
 def _in_tree(repo, ref, path):
     """Whether `path` exists in the tree of `ref`"""
     try:
-        run(repo, ["cat-file", "-e", "{}:{}".format(ref, path)])
+        run(repo, ["cat-file", "-e", f"{ref}:{path}"])
         return True
     except GitError:
         return False
