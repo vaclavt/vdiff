@@ -1,0 +1,21 @@
+{
+    "$schema": "sublime://packagecontrol.io/schemas/repository",
+    "schema_version": "4.0.0",
+    "packages": [
+        {
+            "name": "vDiff",
+            "details": "https://github.com/vaclavt/vdiff",
+            "description": "Review uncommitted changes and commits in Sublime Text: whole files with deletions in red and insertions in green, in the file's own syntax highlighting",
+            "author": "vaclavt",
+            "labels": ["git", "diff", "review", "vcs"],
+            "releases": [
+                {
+                    "sublime_text": ">=4213",
+                    "platforms": ["*"],
+                    "python_versions": ["3.14"],
+                    "tags": true
+                }
+            ]
+        }
+    ]
+}
