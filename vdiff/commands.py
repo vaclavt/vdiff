@@ -1,15 +1,21 @@
 """ Commands: the two quick panels (changed files, recent commits) and the actions of a review view """
 import bisect
 import os
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import sublime
 import sublime_plugin
 
 from . import git, parse, render, state
+from .git import Commit, FileChange
+from .state import Kept, ViewState
 from .utils import file_count, run_async, settings, status
 
+# what an ACTIONS entry does: act(view, window, state) for the review view it was fired in
+Action = Callable[[sublime.View, sublime.Window, ViewState], None]
+
 # quick-panel kind per status letter: colour + the letter; the description comes from git.STATUS_NAMES
-STATUS_COLOURS = {
+STATUS_COLOURS: Dict[str, int] = {
     "M": sublime.KIND_ID_COLOR_ORANGISH,
     "A": sublime.KIND_ID_COLOR_GREENISH,
     "?": sublime.KIND_ID_COLOR_GREENISH,
@@ -30,20 +36,22 @@ MIN_SUBJECT_WIDTH = 24
 PREVIEW_DELAY_MS = 60
 
 # directory -> repository root; roots do not move, and resolving runs on the UI thread
-_roots = {}
+_roots: Dict[str, str] = {}
 
 
-def resolve_repo(window):
+def resolve_repo(window: sublime.Window) -> Optional[str]:
     """Repository of the review view or active file, else of the first project folder that is one"""
     view = window.active_view()
-    candidates = []
+    candidates: List[str] = []
     if view is not None:
         if state.is_review_view(view):
             st = state.get(view) or restore_view(view)
             if st.repo:
                 return st.repo
-        elif view.file_name():
-            candidates.append(os.path.dirname(view.file_name()))
+        else:
+            name = view.file_name()
+            if name:
+                candidates.append(os.path.dirname(name))
     candidates.extend(window.folders())
     for directory in candidates:
         root = _roots.get(directory)
@@ -56,14 +64,14 @@ def resolve_repo(window):
     return None
 
 
-def find_review_view(window):
+def find_review_view(window: sublime.Window) -> Optional[sublime.View]:
     for view in window.views():
         if state.is_review_view(view):
             return view
     return None
 
 
-def open_review(window):
+def open_review(window: sublime.Window) -> Optional[Tuple[sublime.View, ViewState]]:
     """(view, state) of the window's single review view for the resolved repo, focused; None without a repo"""
     repo = resolve_repo(window)
     if not repo:
@@ -81,7 +89,7 @@ def open_review(window):
     return view, st
 
 
-def show_file(view, st, change):
+def show_file(view: sublime.View, st: ViewState, change: FileChange) -> None:
     """Fetch and parse the file's diff on the worker thread, then render it"""
     st.token += 1
     # set before the worker starts: n / p count from here while the diff is still loading
@@ -89,14 +97,14 @@ def show_file(view, st, change):
     token = st.token
     repo, sha = st.repo, st.sha
 
-    def work():
+    def work() -> Optional[Tuple[parse.Diff, List[parse.Block]]]:
         if token != st.token:
             return None  # superseded before it started: skip the subprocess
         text = git.full_diff(repo, change.path, sha=sha, untracked=(change.status == "?"))
         diff = parse.parse_unified(text)
         return diff, parse.change_blocks(diff.lines)
 
-    def done(result):
+    def done(result: Optional[Tuple[parse.Diff, List[parse.Block]]]) -> None:
         if result is None or token != st.token or not view.is_valid():
             return
         diff, blocks = result
@@ -108,8 +116,8 @@ def show_file(view, st, change):
     run_async(work, done)
 
 
-def file_items(files):
-    items = []
+def file_items(files: Sequence[FileChange]) -> List[sublime.QuickPanelItem]:
+    items: List[sublime.QuickPanelItem] = []
     for change in files:
         description = git.STATUS_NAMES.get(change.status, "")
         colour = STATUS_COLOURS.get(change.status)
@@ -125,9 +133,9 @@ def file_items(files):
     return items
 
 
-def commit_items(commits):
+def commit_items(commits: Sequence[Commit]) -> List[sublime.QuickPanelItem]:
     """Quick-panel rows: subject on the left, its totals and the hash right-aligned"""
-    items = []
+    items: List[sublime.QuickPanelItem] = []
     for c in commits:
         annotation = c.short
         if c.files is not None:
@@ -141,13 +149,15 @@ def commit_items(commits):
     return items
 
 
-def show_files_panel(window, view, st, files, kept, on_cancel=None, placeholder="Changed files"):
+def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, files: List[FileChange],
+                     kept: Kept, on_cancel: Optional[Callable[[], None]] = None,
+                     placeholder: str = "Changed files") -> None:
     """Quick panel over `files`; highlighting previews, Enter keeps, Esc restores `kept` (or runs on_cancel)"""
     st.files = files
     selected = max(0, st.index())
     window.focus_view(view)
 
-    def on_select(index):
+    def on_select(index: int) -> None:
         st.highlight += 1  # cancel a pending preview
         if index == -1:
             if on_cancel is not None:
@@ -164,17 +174,23 @@ def show_files_panel(window, view, st, files, kept, on_cancel=None, placeholder=
             return  # the preview already shows it
         show_file(view, st, change)
 
-    def on_highlight(index):
+    def on_highlight(index: int) -> None:
         if not 0 <= index < len(files):
             return
         st.highlight += 1
         ticket = st.highlight
-        sublime.set_timeout(lambda: ticket == st.highlight and show_file(view, st, files[index]), PREVIEW_DELAY_MS)
+
+        def preview() -> None:
+            if ticket == st.highlight:
+                show_file(view, st, files[index])
+
+        sublime.set_timeout(preview, PREVIEW_DELAY_MS)
 
     window.show_quick_panel(file_items(files), on_select, 0, selected, on_highlight, placeholder)
 
 
-def refresh_listing(view, st, message=None, pick=None):
+def refresh_listing(view: sublime.View, st: ViewState, message: Optional[str] = None,
+                    pick: Optional[Callable[[List[FileChange], int], Optional[FileChange]]] = None) -> None:
     """Re-list the working tree changes and show the same file, or the next one when it is gone
 
     `pick(files, index)` may name another file to show instead; `index` is where the shown file
@@ -185,7 +201,7 @@ def refresh_listing(view, st, message=None, pick=None):
     previous_index = max(0, st.index())
     path = st.change.path if st.change else None
 
-    def done(files):
+    def done(files: List[FileChange]) -> None:
         if not view.is_valid():
             return
         st.files = files
@@ -202,7 +218,7 @@ def refresh_listing(view, st, message=None, pick=None):
     run_async(lambda: git.changed_files(st.repo), done)
 
 
-def refresh_if_changed(view, st):
+def refresh_if_changed(view: sublime.View, st: ViewState) -> None:
     """Re-render a working-tree view when the file or the index changed since it was drawn"""
     if st.in_commit or st.change is None:
         return
@@ -213,14 +229,14 @@ def refresh_if_changed(view, st):
 class VdiffFilesCommand(sublime_plugin.WindowCommand):
     """List uncommitted changes (staged, unstaged, untracked) in a quick panel"""
 
-    def run(self):
+    def run(self) -> None:
         window = self.window
         opened = open_review(window)
         if not opened:
             return
         view, st = opened
 
-        def done(files):
+        def done(files: List[FileChange]) -> None:
             if not view.is_valid():
                 return
             kept = st.enter()
@@ -237,7 +253,7 @@ class VdiffFilesCommand(sublime_plugin.WindowCommand):
 class VdiffCommitsCommand(sublime_plugin.WindowCommand):
     """List recent commits, then the files of the chosen commit; `sha` skips straight to one commit"""
 
-    def run(self, selected=0, sha=None):
+    def run(self, selected: int = 0, sha: Optional[str] = None) -> None:
         opened = open_review(self.window)
         if not opened:
             return
@@ -247,7 +263,7 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
             return
         count = int(settings().get("commits_count", 30) or 30)
 
-        def done(commits):
+        def done(commits: List[Commit]) -> None:
             if not view.is_valid():
                 return
             if not commits:
@@ -257,23 +273,23 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
 
         run_async(lambda: git.recent_commits(st.repo, count), done)
 
-    def show_commits(self, view, st, commits, selected):
+    def show_commits(self, view: sublime.View, st: ViewState, commits: Sequence[Commit], selected: int) -> None:
         items = commit_items(commits)
         for i, c in enumerate(commits):
             if c.sha == st.sha:
                 selected = i
 
-        def on_select(index):
+        def on_select(index: int) -> None:
             if index != -1:
                 self.open_commit(view, st, commits[index].sha, index)
 
         self.window.show_quick_panel(items, on_select, 0, selected, None, "Recent commits")
 
-    def open_commit(self, view, st, sha, index):
+    def open_commit(self, view: sublime.View, st: ViewState, sha: str, index: Optional[int]) -> None:
         """Files panel of one commit; Esc goes back to the commit list when it came from there (index given)"""
         window = self.window
 
-        def done(result):
+        def done(result: Tuple[git.CommitInfo, List[FileChange]]) -> None:
             if not view.is_valid():
                 return
             info, files = result
@@ -282,7 +298,7 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
                 render.render_message(view, st, f"Commit {info.short} touches no files")
                 return
 
-            def back():
+            def back() -> None:
                 window.run_command("vdiff_commits", {"selected": index})
 
             placeholder = f"{info.short} · {info.subject}"
@@ -295,29 +311,31 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
 # --- review view actions ----------------------------------------------------
 
 
-def _act_files(view, window, st):
+def _act_files(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     window.run_command("vdiff_files")
 
 
-def _act_commits(view, window, st):
+def _act_commits(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     window.run_command("vdiff_commits")
 
 
-def _act_close(view, window, st):
+def _act_close(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     view.close()
 
 
-def _act_help(view, window, st):
+def _act_help(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     render.show_help(view, st)
 
 
-def _git_action(verb, done_verb, operation, confirm=None, pick=None):
+def _git_action(verb: str, done_verb: str, operation: Callable[[str, FileChange], None],
+                confirm: Optional[Callable[[FileChange], bool]] = None,
+                pick: Optional[Callable[[List[FileChange], int], Optional[FileChange]]] = None) -> Action:
     """Action running `operation(repo, change)` on the shown working-tree file, then re-listing
 
     `pick` is handed to refresh_listing to choose which file to show afterwards.
     """
 
-    def act(view, window, st):
+    def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         if st.in_commit or st.change is None:
             status(f"{verb} works on uncommitted changes only")
             return
@@ -332,7 +350,7 @@ def _git_action(verb, done_verb, operation, confirm=None, pick=None):
     return act
 
 
-def _confirm_discard(change):
+def _confirm_discard(change: FileChange) -> bool:
     if not settings().get("confirm_discard", True):
         return True
     if change.status == "?":
@@ -345,7 +363,7 @@ def _confirm_discard(change):
     return sublime.ok_cancel_dialog(message, "Discard")
 
 
-def _next_unstaged(files, start):
+def _next_unstaged(files: Sequence[FileChange], start: int) -> int:
     """Index of the first unstaged file from `start` on, wrapping round; -1 when every file is staged"""
     for offset in range(len(files)):
         index = (start + offset) % len(files)
@@ -354,7 +372,7 @@ def _next_unstaged(files, start):
     return -1
 
 
-def _stage_next(files, index):
+def _stage_next(files: Sequence[FileChange], index: int) -> Optional[FileChange]:
     """After staging, the next unstaged file to show; None keeps the file the refresh would show"""
     if not settings().get("stage_and_move_next_file", True):
         return None
@@ -363,7 +381,7 @@ def _stage_next(files, index):
     return files[following] if following >= 0 else None
 
 
-def _act_refresh(view, window, st):
+def _act_refresh(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     if st.change is None:
         return
     if st.in_commit:
@@ -372,7 +390,7 @@ def _act_refresh(view, window, st):
         refresh_listing(view, st)
 
 
-def _act_open(view, window, st):
+def _act_open(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     if st.change is None:
         return
     path = os.path.join(st.repo, st.change.path)
@@ -383,8 +401,8 @@ def _act_open(view, window, st):
     window.open_file(f"{path}:{line}", sublime.ENCODED_POSITION)
 
 
-def _step_file(delta):
-    def act(view, window, st):
+def _step_file(delta: int) -> Action:
+    def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         if not st.files:
             status("no file list, press f or c")
             return
@@ -406,8 +424,8 @@ def _step_file(delta):
     return act
 
 
-def _step_change(delta):
-    def act(view, window, st):
+def _step_change(delta: int) -> Action:
+    def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         starts = [start for start, _ in st.blocks]
         if not starts:
             status("no changes to step through")
@@ -425,7 +443,7 @@ def _step_change(delta):
     return act
 
 
-def _act_commit(view, window, st):
+def _act_commit(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     """Commit the staged files with a message typed into an input panel; Esc there cancels"""
     if st.in_commit:
         status("commit works on uncommitted changes only")
@@ -435,7 +453,7 @@ def _act_commit(view, window, st):
         status("no staged files")
         return
 
-    def on_done(message):
+    def on_done(message: str) -> None:
         if not message.strip():
             status("commit cancelled: empty message")
             return
@@ -447,7 +465,7 @@ def _act_commit(view, window, st):
     window.show_input_panel("Commit message", "", on_done, None, None)
 
 
-def _act_amend(view, window, st):
+def _act_amend(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     """Rewrite HEAD's message in an input panel, folding in whatever is staged; Esc there cancels
 
     The panel is one line, so only the subject is offered; the rest of the message rides along
@@ -458,10 +476,10 @@ def _act_amend(view, window, st):
         return
     staged = [c for c in st.files if c.staged]
 
-    def prompt(message):
+    def prompt(message: str) -> None:
         subject, newline, body = message.partition("\n")
 
-        def on_done(text):
+        def on_done(text: str) -> None:
             if not text.strip():
                 status("amend cancelled: empty message")
                 return
@@ -482,14 +500,14 @@ def _act_amend(view, window, st):
     run_async(lambda: git.head_message(st.repo), prompt)
 
 
-def _move_line(forward):
-    def act(view, window, st):
+def _move_line(forward: bool) -> Action:
+    def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         view.run_command("move", {"by": "lines", "forward": forward})
 
     return act
 
 
-ACTIONS = {
+ACTIONS: Dict[str, Action] = {
     "files": _act_files,
     "commits": _act_commits,
     "close": _act_close,
@@ -513,10 +531,10 @@ ACTIONS = {
 class VdiffActionCommand(sublime_plugin.TextCommand):
     """Every key/link action of a review view, dispatched by name through ACTIONS"""
 
-    def is_enabled(self, action=None):
+    def is_enabled(self, action: Optional[str] = None) -> bool:
         return state.is_review_view(self.view)
 
-    def run(self, edit, action):
+    def run(self, edit: sublime.Edit, action: str) -> None:
         act = ACTIONS.get(action)
         if act is None:
             status(f"unknown action {action}")
@@ -525,7 +543,7 @@ class VdiffActionCommand(sublime_plugin.TextCommand):
         act(self.view, self.view.window(), st)
 
 
-def restore_view(view):
+def restore_view(view: sublime.View) -> ViewState:
     """Rebuild the state of a review view restored from a previous session; re-renders asynchronously"""
     data = view.settings().get(state.VIEW_DATA) or {}
     repo = data.get("repo")
@@ -542,16 +560,17 @@ def restore_view(view):
         return st
     change = git.FileChange(path, data.get("status", "M"), bool(data.get("staged")), None, None, None)
 
-    if st.in_commit:
+    sha = st.sha
+    if sha is not None:
 
-        def done(result):
+        def show_commit(result: Tuple[git.CommitInfo, List[FileChange]]) -> None:
             st.commit, st.files = result
             show_file(view, st, change)
 
-        run_async(lambda: git.commit_with_files(repo, st.sha), done)
+        run_async(lambda: git.commit_with_files(repo, sha), show_commit)
     else:
 
-        def done(files):
+        def show_working_tree(files: List[FileChange]) -> None:
             st.files = files
             index = state.find_change(files, path)
             if index >= 0:
@@ -559,5 +578,5 @@ def restore_view(view):
             else:
                 render.render_message(view, st, f"{path} has no uncommitted changes any more")
 
-        run_async(lambda: git.changed_files(repo), done)
+        run_async(lambda: git.changed_files(repo), show_working_tree)
     return st

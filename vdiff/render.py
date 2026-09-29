@@ -3,14 +3,15 @@ import bisect
 import html
 import logging
 import os
-from collections import namedtuple
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import sublime
 import sublime_plugin
 
 from . import palette, parse
-from .git import STATUS_NAMES
-from .state import VIEW_FLAG
+from .git import FileChange, STATUS_NAMES
+from .parse import Block, Line
+from .state import VIEW_FLAG, ViewState
 from .utils import file_count, settings, status
 
 LOG = logging.getLogger("vdiff")
@@ -21,7 +22,7 @@ KEY_DEL_GUTTER = "vdiff.del.gutter"
 KEY_INS_GUTTER = "vdiff.ins.gutter"
 KEY_DEL_CHAR = "vdiff.del.char"
 KEY_INS_CHAR = "vdiff.ins.char"
-REGION_KEYS = (KEY_DEL, KEY_INS, KEY_DEL_GUTTER, KEY_INS_GUTTER, KEY_DEL_CHAR, KEY_INS_CHAR)
+REGION_KEYS: Tuple[str, ...] = (KEY_DEL, KEY_INS, KEY_DEL_GUTTER, KEY_INS_GUTTER, KEY_DEL_CHAR, KEY_INS_CHAR)
 
 PHANTOM_KEY = "vdiff.header"
 STATUS_KEY = "vdiff"
@@ -51,9 +52,17 @@ NEEDS_RESTART = "restart Sublime Text to finish enabling syntax highlighting on 
 # one source for the status-bar hints and the ? popup.
 # actions: the ACTIONS names the row covers; a single one makes the row a link. short: status-bar
 # wording, "" keeps the row out of it. The group flag is False for groups needing a working-tree file.
-Key = namedtuple("Key", "keys label short actions")
+class Key(NamedTuple):
+    """One row of the status-bar hints and the ? popup"""
 
-KEY_GROUPS = [
+    keys: str
+    label: str
+    short: str
+    actions: Tuple[str, ...]
+
+
+# (group title, applies in a commit, rows)
+KEY_GROUPS: List[Tuple[str, bool, List[Key]]] = [
     (
         "Navigate",
         True,
@@ -94,7 +103,7 @@ KEY_GROUPS = [
     ),
 ]
 
-KEYS = [key for _, _, group in KEY_GROUPS for key in group]
+KEYS: List[Key] = [key for _, _, group in KEY_GROUPS for key in group]
 
 KEY_HINTS = "   ".join(f"{k.keys} {k.short}" for k in KEYS if k.short)
 
@@ -137,11 +146,11 @@ a { text-decoration: none; color: color(var(--foreground) alpha(0.85)); }
 class VdiffReplaceCommand(sublime_plugin.TextCommand):
     """Replace the whole buffer; the only writer of a review view"""
 
-    def run(self, edit, text):
+    def run(self, edit: sublime.Edit, text: str) -> None:
         self.view.replace(edit, sublime.Region(0, self.view.size()), text)
 
 
-def init_view(view):
+def init_view(view: sublime.View) -> None:
     """Settings a review view needs, applied once when it is created or restored"""
     s = view.settings()
     s.set(VIEW_FLAG, True)
@@ -167,40 +176,40 @@ def init_view(view):
     view.set_status(STATUS_KEY, KEY_HINTS)
 
 
-def index_point(view, index, col=0):
+def index_point(view: sublime.View, index: int, col: int = 0) -> int:
     """Text point of column `col` on the row showing st.lines[index]"""
     return view.text_point(index + _HEADER_ROWS, col)
 
 
-def caret_index(view):
+def caret_index(view: sublime.View) -> int:
     """Index into st.lines of the caret's row (the header row maps to -1)"""
     if not len(view.sel()):
         return 0
     return view.rowcol(view.sel()[0].begin())[0] - _HEADER_ROWS
 
 
-def fingerprint(st):
+def fingerprint(st: ViewState) -> Optional[Tuple[Optional[float], Optional[float]]]:
     """Cheap "did anything change" key for working-tree mode: mtimes of the file and of the git index"""
     if st.in_commit or st.change is None:
         return None
     return (_mtime(os.path.join(st.repo, st.change.path)), _mtime(os.path.join(st.repo, ".git", "index")))
 
 
-def _mtime(path):
+def _mtime(path: str) -> Optional[float]:
     try:
         return os.stat(path).st_mtime
     except OSError:
         return None
 
 
-def flash(view):
+def flash(view: sublime.View) -> None:
     """Visual bell: tint the buffer for a moment, for feedback that has nothing to say in words"""
     view.add_regions(BELL_KEY, [sublime.Region(0, view.size())], _bell_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     # unconditional erase: overlapping flashes may cut one short, but none can leave the tint stuck
     sublime.set_timeout(lambda: view.is_valid() and view.erase_regions(BELL_KEY), BELL_MS)
 
 
-def _bell_scope(view):
+def _bell_scope(view: sublime.View) -> str:
     """region.yellowish, or a scope with a background we know of when a scheme lacks it"""
     if palette.scope_background(view, SCOPE_BELL):
         return SCOPE_BELL
@@ -208,7 +217,7 @@ def _bell_scope(view):
     return palette.SCOPE_INS
 
 
-def render_message(view, st, message):
+def render_message(view: sublime.View, st: ViewState, message: str) -> None:
     """Show a one-line notice instead of a file (nothing to review, binary, ...)"""
     st.change = None
     st.lines = []
@@ -219,8 +228,11 @@ def render_message(view, st, message):
     _finish(view, st, 0, 0, "vDiff")
 
 
-def render(view, st):
+def render(view: sublime.View, st: ViewState) -> None:
     """Draw st.lines for st.change into the view"""
+    change = st.change
+    # every caller with nothing to show goes to render_message instead, so there is a file here
+    assert change is not None
     lines = st.lines
     if st.binary:
         text = "(binary file)"
@@ -230,7 +242,7 @@ def render(view, st):
         text = "\n".join(line.text for line in lines)
 
     _replace(view, text)
-    path = os.path.join(st.repo, st.change.path)
+    path = os.path.join(st.repo, change.path)
     _apply_syntax(view, path if lines and not st.binary else None)
 
     if lines and not st.binary:
@@ -242,13 +254,13 @@ def render(view, st):
             status(NEEDS_RESTART)
 
     ins, dele = parse.counts(lines)
-    _finish(view, st, ins, dele, f"⟐ {os.path.basename(st.change.path)}")
+    _finish(view, st, ins, dele, f"⟐ {os.path.basename(change.path)}")
     view.sel().clear()
     view.sel().add(sublime.Region(index_point(view, 0)))
     view.set_viewport_position((0, 0), False)
 
 
-def _paint_regions(view, st):
+def _paint_regions(view: sublime.View, st: ViewState) -> None:
     """The line tint, the gutter dots, the word-diff marks, and the syntax colours on top of them"""
     lines = st.lines
     starts = _row_starts(lines)
@@ -260,7 +272,8 @@ def _paint_regions(view, st):
     ins_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "+"]
     view.add_regions(KEY_DEL_GUTTER, del_marks, SCOPE_DEL_MARK, icon="dot", flags=mark_flags)
     view.add_regions(KEY_INS_GUTTER, ins_marks, SCOPE_INS_MARK, icon="dot", flags=mark_flags)
-    del_chars, ins_chars = [], []
+    del_chars: List[sublime.Region] = []
+    ins_chars: List[sublime.Region] = []
     if settings().get("word_diff", True):
         del_chars, ins_chars = _char_regions(lines, st.blocks, starts)
         view.add_regions(KEY_DEL_CHAR, del_chars, palette.SCOPE_DEL_CHAR, flags=sublime.DRAW_NO_OUTLINE)
@@ -268,7 +281,8 @@ def _paint_regions(view, st):
     _paint_tokens(view, lines, starts, del_chars + ins_chars)
 
 
-def _paint_tokens(view, lines, starts, char_regions):
+def _paint_tokens(view: sublime.View, lines: Sequence[Line], starts: Sequence[int],
+                  char_regions: Sequence[sublime.Region]) -> None:
     """Repaint each run of same-coloured tokens with a scope carrying the tint *and* that colour
 
     add_regions draws the text it covers in the region scope's own foreground, so the tints above have
@@ -284,8 +298,8 @@ def _paint_tokens(view, lines, starts, char_regions):
 
     stronger = sorted((r.a, r.b) for r in char_regions)
     starts_of = [a for a, _ in stronger]
-    groups = {}
-    colours = {}  # scope name -> colour, resolved once per render
+    groups: Dict[str, List[sublime.Region]] = {}
+    colours: Dict[str, Optional[str]] = {}  # scope name -> colour, resolved once per render
     for i in changed:
         kind = "del" if lines[i].kind == "-" else "ins"
         end = starts[i] + len(lines[i].text)
@@ -302,11 +316,11 @@ def _paint_tokens(view, lines, starts, char_regions):
         view.add_regions(palette.token_key(scope), regions, scope, flags=sublime.DRAW_NO_OUTLINE)
 
 
-def _split(region, intervals):
+def _split(region: sublime.Region, intervals: Sequence[Tuple[int, int]]) -> List[Tuple[sublime.Region, bool]]:
     """(part, inside) covering `region`, cut wherever one of the sorted `intervals` starts or ends"""
     if not intervals:
         return [(region, False)]
-    parts = []
+    parts: List[Tuple[sublime.Region, bool]] = []
     pos = region.a
     for a, b in intervals:
         a, b = max(a, region.a), min(b, region.b)
@@ -323,9 +337,10 @@ def _split(region, intervals):
     return parts
 
 
-def _colour_runs(view, start, text, colours):
+def _colour_runs(view: sublime.View, start: int, text: str,
+                 colours: Dict[str, Optional[str]]) -> List[Tuple[sublime.Region, str]]:
     """(region, colour) per run of same-coloured tokens on one line, adjacent equal colours merged"""
-    runs = []
+    runs: List[Tuple[sublime.Region, str]] = []
     for region, scope in view.extract_tokens_with_scopes(sublime.Region(start, start + len(text))):
         if scope not in colours:
             colours[scope] = palette.foreground(view, scope)
@@ -339,7 +354,7 @@ def _colour_runs(view, start, text, colours):
     return runs
 
 
-def _finish(view, st, ins, dele, name):
+def _finish(view: sublime.View, st: ViewState, ins: int, dele: int, name: str) -> None:
     """Header, tab name, status bar and bookkeeping shared by render and render_message"""
     _header(view, st, ins, dele)
     view.set_name(name)
@@ -348,7 +363,7 @@ def _finish(view, st, ins, dele, name):
     st.fingerprint = fingerprint(st)
 
 
-def _replace(view, text):
+def _replace(view: sublime.View, text: str) -> None:
     view.set_read_only(False)
     try:
         view.run_command("vdiff_replace", {"text": "\n" * _HEADER_ROWS + text})
@@ -359,7 +374,7 @@ def _replace(view, text):
         view.erase_regions(key)
 
 
-def _apply_syntax(view, path):
+def _apply_syntax(view: sublime.View, path: Optional[str]) -> None:
     """The real file's syntax, so the diff is highlighted like the file itself"""
     syntax = None
     if path:
@@ -370,9 +385,9 @@ def _apply_syntax(view, path):
     view.assign_syntax(syntax.path if syntax else "scope:text.plain")
 
 
-def _row_starts(lines):
+def _row_starts(lines: Sequence[Line]) -> List[int]:
     """Text point where each line starts; computed from the text we wrote, no view round-trips"""
-    starts = []
+    starts: List[int] = []
     point = _HEADER_ROWS
     for line in lines:
         starts.append(point)
@@ -381,9 +396,10 @@ def _row_starts(lines):
     return starts
 
 
-def _line_regions(lines, starts):
+def _line_regions(lines: Sequence[Line],
+                  starts: Sequence[int]) -> Tuple[List[sublime.Region], List[sublime.Region]]:
     """Full-line regions of deleted and inserted rows, consecutive rows merged"""
-    regions = {"-": [], "+": []}
+    regions: Dict[str, List[sublime.Region]] = {"-": [], "+": []}
     for kind, start, end in parse.runs(lines, lambda line: line.kind):
         if kind in regions:
             # starts has a sentinel at len(lines): the last line stops at the buffer end
@@ -391,10 +407,11 @@ def _line_regions(lines, starts):
     return regions["-"], regions["+"]
 
 
-def _char_regions(lines, blocks, starts):
+def _char_regions(lines: Sequence[Line], blocks: Sequence[Block],
+                  starts: Sequence[int]) -> Tuple[List[sublime.Region], List[sublime.Region]]:
     """Changed characters inside paired deleted/inserted lines"""
-    deleted = []
-    inserted = []
+    deleted: List[sublime.Region] = []
+    inserted: List[sublime.Region] = []
     for block in blocks:
         for del_row, ins_row in parse.paired_lines(lines, block):
             old_ranges, new_ranges = parse.char_ranges(lines[del_row].text, lines[ins_row].text)
@@ -403,12 +420,12 @@ def _char_regions(lines, blocks, starts):
     return deleted, inserted
 
 
-def _totals(files):
+def _totals(files: Sequence[FileChange]) -> Tuple[int, int]:
     """Summed numstat counts; binary files carry None counts and add nothing"""
     return sum(c.insertions or 0 for c in files), sum(c.deletions or 0 for c in files)
 
 
-def _summary_html(st):
+def _summary_html(st: ViewState) -> str:
     """Line above the header: the whole commit on one line, or how much of the tree is staged"""
     if not st.files and not st.commit:
         return ""
@@ -425,10 +442,10 @@ def _summary_html(st):
     return f'<div class="summary">{text}</div>'
 
 
-def _commit_parts(st):
+def _commit_parts(st: ViewState) -> List[str]:
     """hash, author, date, totals and message — everything about the reviewed commit, in that order"""
     info = st.commit
-    parts = []
+    parts: List[str] = []
     if info:
         parts.append(f'<span class="hash">{html.escape(info.short)}</span>')
         parts.append(html.escape(info.author))
@@ -445,7 +462,7 @@ def _commit_parts(st):
     return parts
 
 
-def header_html(st, ins, dele):
+def header_html(st: ViewState, ins: int, dele: int) -> str:
     """The minihtml header: the summary line, then the shown file's path, counts, state and action links"""
     change = st.change
     if change is None:
@@ -460,7 +477,7 @@ def header_html(st, ins, dele):
             if state:
                 title += f'&nbsp;&nbsp;<span class="state">{state}</span>'
 
-    actions = []
+    actions: List[str] = []
     if change is not None and not st.in_commit:
         actions.append('<a href="stage">Stage</a>')
         actions.append('<a href="unstage">Unstage</a>')
@@ -477,15 +494,15 @@ def header_html(st, ins, dele):
     )
 
 
-def _run_action(view, href):
+def _run_action(view: sublime.View, href: str) -> None:
     """Dispatch a header or popup link through the same command the keymap uses"""
     view.run_command("vdiff_action", {"action": href})
 
 
-def _header(view, st, ins, dele):
+def _header(view: sublime.View, st: ViewState, ins: int, dele: int) -> None:
     """One block phantom above the text; redrawn from scratch, so no PhantomSet state to keep"""
 
-    def navigate(href):
+    def navigate(href: str) -> None:
         _run_action(view, href)
 
     view.erase_phantoms(PHANTOM_KEY)
@@ -495,9 +512,9 @@ def _header(view, st, ins, dele):
 # --- key help popup ---------------------------------------------------------
 
 
-def help_html(st):
+def help_html(st: ViewState) -> str:
     """The minihtml key list; rows that need a working-tree file are dimmed while a commit is shown"""
-    parts = []
+    parts: List[str] = []
     for title, applies, group in KEY_GROUPS:
         dim = st.in_commit and not applies
         heading = html.escape(title)
@@ -517,13 +534,13 @@ def help_html(st):
     return f'<body id="vdiff-help"><style>{HELP_CSS}</style>{"".join(parts)}</body>'
 
 
-def show_help(view, st):
+def show_help(view: sublime.View, st: ViewState) -> None:
     """Toggle the key list popup at the caret"""
     if view.is_popup_visible():
         view.hide_popup()
         return
 
-    def navigate(href):
+    def navigate(href: str) -> None:
         view.hide_popup()
         _run_action(view, href)
 

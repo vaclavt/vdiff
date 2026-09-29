@@ -36,6 +36,10 @@ class Region:
         return f"Region({self.a}, {self.b})"
 
 
+class Edit:
+    """Opaque edit token; only ever passed through, so the annotations have something to name"""
+
+
 class Settings(dict):
     def get(self, key, default=None):
         return dict.get(self, key, default)

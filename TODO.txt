@@ -16,4 +16,3 @@
 
 ## Code
 
-- add type hints

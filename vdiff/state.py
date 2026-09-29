@@ -1,17 +1,30 @@
 """ Per-view state of review views, keyed by view id; the essentials are mirrored into view settings for restore """
-from collections import namedtuple
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    # annotation-only, so this module keeps importing neither sublime nor the rest of the package
+    import sublime
+
+    from .git import CommitInfo, FileChange
+    from .parse import Block, Line
 
 # view setting marking a review view (keymap context "setting.vdiff_view")
 VIEW_FLAG = "vdiff_view"
 # view setting holding what the view shows, so a restored tab can re-render
 VIEW_DATA = "vdiff"
 
-# what a quick panel goes back to on Esc
-Kept = namedtuple("Kept", "sha commit change files")
+
+class Kept(NamedTuple):
+    """What a quick panel goes back to on Esc"""
+
+    sha: Optional[str]
+    commit: Optional["CommitInfo"]
+    change: Optional["FileChange"]
+    files: List["FileChange"]
 
 
-def find_change(files, path):
+def find_change(files: Sequence["FileChange"], path: Optional[str]) -> int:
     """Index of the FileChange with `path`, or -1"""
     for i, change in enumerate(files):
         if change.path == path:
@@ -27,24 +40,25 @@ class ViewState:
     """
 
     repo: str
-    sha: object = None  # None in working-tree mode, the reviewed commit's hash otherwise
-    commit: object = None  # git.CommitInfo when sha is set
-    change: object = None  # git.FileChange currently shown
-    requested: object = None  # file asked for, maybe still loading; navigation counts from here
-    files: list = field(default_factory=list)  # git.FileChange list the user is browsing (next/prev file)
-    lines: list = field(default_factory=list)  # parse.Line list currently rendered
-    blocks: list = field(default_factory=list)  # parse.change_blocks(lines)
+    sha: Optional[str] = None  # None in working-tree mode, the reviewed commit's hash otherwise
+    commit: Optional["CommitInfo"] = None  # set when sha is
+    change: Optional["FileChange"] = None  # file currently shown
+    requested: Optional["FileChange"] = None  # file asked for, maybe still loading; navigation counts from here
+    files: List["FileChange"] = field(default_factory=list)  # what the user is browsing (next/prev file)
+    lines: List["Line"] = field(default_factory=list)  # currently rendered
+    blocks: List["Block"] = field(default_factory=list)  # parse.change_blocks(lines)
     binary: bool = False
     token: int = 0  # bumped per show request; a stale async result is dropped
     rendered_token: int = -1  # token of the request that produced the current render
     highlight: int = 0  # bumped per quick-panel highlight, to debounce previews
-    fingerprint: object = None  # (file mtime, index mtime) at render time, working-tree mode
+    # (file mtime, index mtime) at render time, working-tree mode; either mtime is None when unreadable
+    fingerprint: Optional[Tuple[Optional[float], Optional[float]]] = None
 
     @property
-    def in_commit(self):
+    def in_commit(self) -> bool:
         return self.sha is not None
 
-    def index(self):
+    def index(self) -> int:
         """Position in `files` of the file being shown or loaded, or -1
 
         `requested` leads: a diff arrives asynchronously, so counting from `change` alone would make
@@ -53,10 +67,10 @@ class ViewState:
         change = self.requested or self.change
         return find_change(self.files, change.path) if change else -1
 
-    def kept(self):
+    def kept(self) -> Kept:
         return Kept(self.sha, self.commit, self.change, list(self.files))
 
-    def enter(self, sha=None, commit=None):
+    def enter(self, sha: Optional[str] = None, commit: Optional["CommitInfo"] = None) -> Kept:
         """Switch to browsing a commit (or the working tree); returns what to restore on Esc"""
         kept = self.kept()
         if sha != self.sha:
@@ -64,13 +78,13 @@ class ViewState:
         self.sha, self.commit = sha, commit
         return kept
 
-    def restore(self, kept):
+    def restore(self, kept: Kept) -> None:
         self.sha, self.commit, self.change, self.files = kept
         self.requested = kept.change
 
-    def persist(self, view):
+    def persist(self, view: "sublime.View") -> None:
         """Mirror the essentials into view settings (survives a restart)"""
-        data = {"repo": self.repo, "sha": self.sha}
+        data: Dict[str, Any] = {"repo": self.repo, "sha": self.sha}
         if self.change:
             data["path"] = self.change.path
             data["status"] = self.change.status
@@ -78,26 +92,26 @@ class ViewState:
         view.settings().set(VIEW_DATA, data)
 
 
-STATES = {}
+STATES: Dict[int, "ViewState"] = {}
 
 
-def get(view):
+def get(view: "sublime.View") -> Optional[ViewState]:
     return STATES.get(view.id())
 
 
-def tracked():
+def tracked() -> List[Tuple[int, ViewState]]:
     """Snapshot of (view id, state) for every tracked review view"""
     return list(STATES.items())
 
 
-def put(view, st):
+def put(view: "sublime.View", st: ViewState) -> ViewState:
     STATES[view.id()] = st
     return st
 
 
-def drop(view):
+def drop(view: "sublime.View") -> None:
     STATES.pop(view.id(), None)
 
 
-def is_review_view(view):
+def is_review_view(view: Optional["sublime.View"]) -> bool:
     return bool(view and view.settings().get(VIEW_FLAG))

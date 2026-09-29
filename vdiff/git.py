@@ -2,13 +2,44 @@
 import os
 import re
 import subprocess
-from collections import namedtuple
+from typing import Dict, List, Optional, NamedTuple, Sequence, Tuple
 
-# path, one-letter status (M A D R ?), staged flag, numstat counts (None for binary), rename source
-FileChange = namedtuple("FileChange", "path status staged insertions deletions old_path")
-# shortstat totals; all three are None when git prints no diffstat (merges, empty commits)
-Commit = namedtuple("Commit", "sha short author date subject files insertions deletions")
-CommitInfo = namedtuple("CommitInfo", "sha short author date subject body")
+
+class FileChange(NamedTuple):
+    """path, one-letter status (M A D R ?), staged flag, numstat counts (None for binary), rename source"""
+
+    path: str
+    status: str
+    staged: bool
+    insertions: Optional[int]
+    deletions: Optional[int]
+    old_path: Optional[str]
+
+
+class Commit(NamedTuple):
+    """shortstat totals; all three are None when git prints no diffstat (merges, empty commits)"""
+
+    sha: str
+    short: str
+    author: str
+    date: str
+    subject: str
+    files: Optional[int]
+    insertions: Optional[int]
+    deletions: Optional[int]
+
+
+class CommitInfo(NamedTuple):
+    sha: str
+    short: str
+    author: str
+    date: str
+    subject: str
+    body: str
+
+
+# a numstat entry: insertions, deletions (both None for a binary file) and the rename source
+Numstat = Tuple[Optional[int], Optional[int], Optional[str]]
 
 # hash of the empty tree: the diff base for a repository without commits
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -17,9 +48,9 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 FULL_CONTEXT = "-U999999"
 
 # overridable from settings (sublime's PATH may not have a user-installed git)
-GIT_BINARY = "git"
+GIT_BINARY: str = "git"
 
-STATUS_NAMES = {
+STATUS_NAMES: Dict[str, str] = {
     "M": "modified",
     "A": "added",
     "D": "deleted",
@@ -40,14 +71,14 @@ _SHORTSTAT = re.compile(r"\s*(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(
 class GitError(Exception):
     """git exited with an unexpected code; str() is the first stderr line, `stderr` the whole of it"""
 
-    def __init__(self, stderr, code):
+    def __init__(self, stderr: str, code: int) -> None:
         self.stderr = stderr
         self.code = code
         first = stderr.strip().splitlines()
         super().__init__(first[0] if first else f"git exited with {code}")
 
 
-def run(repo, args, ok_codes=(0,)):
+def run(repo: str, args: Sequence[str], ok_codes: Tuple[int, ...] = (0,)) -> str:
     """Run git in `repo`, return stdout as text"""
     cmd = [GIT_BINARY, "-c", "core.quotepath=off", "--no-pager"] + list(args)
     proc = subprocess.run(cmd, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
@@ -56,7 +87,7 @@ def run(repo, args, ok_codes=(0,)):
     return proc.stdout
 
 
-def repo_root(path):
+def repo_root(path: Optional[str]) -> Optional[str]:
     """Top-level directory of the repository containing `path`, or None"""
     if not path:
         return None
@@ -70,7 +101,7 @@ def repo_root(path):
     return root or None
 
 
-def has_head(repo):
+def has_head(repo: str) -> bool:
     """False in a repository without commits"""
     try:
         run(repo, ["rev-parse", "--verify", "-q", "HEAD"])
@@ -79,19 +110,19 @@ def has_head(repo):
         return False
 
 
-def base_ref(repo):
+def base_ref(repo: str) -> str:
     """HEAD, or the empty tree when there is no commit yet"""
     return "HEAD" if has_head(repo) else EMPTY_TREE
 
 
-def _int_or_none(value):
+def _int_or_none(value: str) -> Optional[int]:
     """A numstat count: "-" marks a binary file"""
     return None if value == "-" else int(value)
 
 
-def _parse_numstat(text):
+def _parse_numstat(text: str) -> Dict[str, Numstat]:
     """`--numstat -z` output -> {path: (insertions, deletions, old_path)}"""
-    result = {}
+    result: Dict[str, Numstat] = {}
     fields = iter(text.split("\0"))
     for entry in fields:
         parts = entry.split("\t")
@@ -107,9 +138,9 @@ def _parse_numstat(text):
     return result
 
 
-def _parse_name_status(text):
+def _parse_name_status(text: str) -> List[Tuple[str, str, Optional[str]]]:
     """`--name-status -z` output -> [(status letter, path, old_path)]"""
-    result = []
+    result: List[Tuple[str, str, Optional[str]]] = []
     fields = iter(text.split("\0"))
     for status in fields:
         if not status:
@@ -122,7 +153,7 @@ def _parse_name_status(text):
     return result
 
 
-def _count_lines(path):
+def _count_lines(path: str) -> Optional[int]:
     """Line count of a working-tree file, None when binary or unreadable"""
     try:
         with open(path, "rb") as f:
@@ -144,7 +175,7 @@ def _count_lines(path):
     return count + (0 if last == b"\n" else 1)
 
 
-def changed_files(repo):
+def changed_files(repo: str) -> List[FileChange]:
     """Working tree changes vs HEAD: staged, unstaged and untracked, sorted by path"""
     status = run(repo, ["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all", "--no-renames"])
     entries = [e for e in status.split("\0") if e]
@@ -152,7 +183,7 @@ def changed_files(repo):
     base = EMPTY_TREE if "# branch.oid (initial)" in entries else "HEAD"
     counts = _parse_numstat(run(repo, ["diff", "--numstat", "-z", "--no-renames", base]))
 
-    changes = []
+    changes: List[FileChange] = []
     for entry in entries:
         kind = entry[0]
         if kind == "1":
@@ -177,26 +208,28 @@ def changed_files(repo):
     return changes
 
 
-def recent_commits(repo, count):
+def recent_commits(repo: str, count: int) -> List[Commit]:
     """Last `count` commits, newest first; empty list without commits"""
     if not has_head(repo):
         return []
     # --shortstat rides along on the same call: one subprocess, totals for free
     text = run(repo, ["log", "-n", str(count), "--format=%H%x1f%h%x1f%an%x1f%ar%x1f%s", "--shortstat"])
-    commits = []
+    commits: List[Commit] = []
     for line in text.split("\n"):
         parts = line.split("\x1f")
         if len(parts) == 5:
-            commits.append(Commit(*parts, files=None, insertions=None, deletions=None))
+            sha, short, author, date, subject = parts
+            commits.append(Commit(sha, short, author, date, subject, files=None, insertions=None, deletions=None))
             continue
-        stat = commits and commits[-1].files is None and _SHORTSTAT.match(line)
-        if stat:
-            files, ins, dele = (int(g or 0) for g in stat.groups())
-            commits[-1] = commits[-1]._replace(files=files, insertions=ins, deletions=dele)
+        if commits and commits[-1].files is None:
+            stat = _SHORTSTAT.match(line)
+            if stat:
+                files, ins, dele = (int(g or 0) for g in stat.groups())
+                commits[-1] = commits[-1]._replace(files=files, insertions=ins, deletions=dele)
     return commits
 
 
-def commit_with_files(repo, sha):
+def commit_with_files(repo: str, sha: str) -> Tuple[CommitInfo, List[FileChange]]:
     """(CommitInfo, [FileChange]) of one commit vs its first parent, files sorted by path; two git calls"""
     show = ["show", "--first-parent", "-m", "-z"]
     text = run(repo, show + [f"--format={_INFO_FORMAT}%x00", _DATE_FORMAT, "--name-status", sha])
@@ -209,7 +242,7 @@ def commit_with_files(repo, sha):
     info = CommitInfo(*parts[:6])
 
     counts = _parse_numstat(run(repo, show + ["--format=", "--numstat", sha]))
-    changes = []
+    changes: List[FileChange] = []
     for status, path, old_path in _parse_name_status(files_text):
         ins, dele, _ = counts.get(path, (None, None, None))
         changes.append(FileChange(path, status, False, ins, dele, old_path))
@@ -217,7 +250,7 @@ def commit_with_files(repo, sha):
     return info, changes
 
 
-def _in_tree(repo, ref, path):
+def _in_tree(repo: str, ref: str, path: str) -> bool:
     """Whether `path` exists in the tree of `ref`"""
     try:
         run(repo, ["cat-file", "-e", f"{ref}:{path}"])
@@ -226,7 +259,7 @@ def _in_tree(repo, ref, path):
         return False
 
 
-def full_diff(repo, path, sha=None, untracked=False):
+def full_diff(repo: str, path: str, sha: Optional[str] = None, untracked: bool = False) -> str:
     """Unified diff of one file with the whole file as context
 
     Working tree vs HEAD (staged and unstaged merged) by default; a commit vs its
@@ -240,22 +273,22 @@ def full_diff(repo, path, sha=None, untracked=False):
     return run(repo, ["diff"] + common + [base_ref(repo), "--", path])
 
 
-def stage(repo, change):
+def stage(repo: str, change: FileChange) -> None:
     """Stage the whole file, including its deletion"""
     run(repo, ["add", "-A", "--", change.path])
 
 
-def commit(repo, message):
+def commit(repo: str, message: str) -> None:
     """Commit what is staged; the message is one argv element, so it needs no quoting of its own"""
     run(repo, ["commit", "-m", message])
 
 
-def head_message(repo):
+def head_message(repo: str) -> str:
     """HEAD's whole message, exactly as git stores it"""
     return run(repo, ["log", "-1", "--format=%B"]).strip("\n")
 
 
-def amend(repo, message, allow_empty=False):
+def amend(repo: str, message: str, allow_empty: bool = False) -> None:
     """Rewrite HEAD with `message`, folding in whatever is staged
 
     `allow_empty` for a pure reword: git otherwise refuses an amend whose result carries no change,
@@ -264,7 +297,7 @@ def amend(repo, message, allow_empty=False):
     run(repo, ["commit", "--amend"] + (["--allow-empty"] if allow_empty else []) + ["-m", message])
 
 
-def unstage(repo, change):
+def unstage(repo: str, change: FileChange) -> None:
     """Move the file's staged changes back to the working tree"""
     if has_head(repo):
         run(repo, ["reset", "-q", "--", change.path])
@@ -272,7 +305,7 @@ def unstage(repo, change):
         run(repo, ["rm", "-r", "-q", "--cached", "--", change.path])
 
 
-def discard(repo, change):
+def discard(repo: str, change: FileChange) -> None:
     """Throw away the file's changes, staged and unstaged, restoring the HEAD version"""
     if change.status == "?":
         run(repo, ["clean", "-f", "--", change.path])

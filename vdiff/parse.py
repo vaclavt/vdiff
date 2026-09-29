@@ -1,12 +1,32 @@
 """ Unified diff -> lines with old/new numbers, change blocks, word-level ranges; no sublime imports """
 import difflib
 import re
-from collections import Counter, namedtuple
+from collections import Counter
 from itertools import groupby
+from typing import Callable, Iterator, List, NamedTuple, Optional, Sequence, Tuple, TypeVar
 
-# kind is " " (context), "-" (deleted) or "+" (inserted); the missing number is None
-Line = namedtuple("Line", "kind old_no new_no text")
-Diff = namedtuple("Diff", "lines binary")
+
+class Line(NamedTuple):
+    """kind is " " (context), "-" (deleted) or "+" (inserted); the missing number is None"""
+
+    kind: str
+    old_no: Optional[int]
+    new_no: Optional[int]
+    text: str
+
+
+class Diff(NamedTuple):
+    lines: List[Line]
+    binary: bool
+
+
+# the value `runs` groups by, so a caller gets its own key type back rather than `object`
+Key = TypeVar("Key")
+
+# an (start, end) index range of consecutive changed lines
+Block = Tuple[int, int]
+# a (start, end) character range inside one line's text
+CharRange = Tuple[int, int]
 
 # word-level marks only when the pair is mostly the same line, and never on huge lines (quadratic)
 CHAR_DIFF_MIN_RATIO = 0.5
@@ -15,9 +35,9 @@ CHAR_DIFF_MAX_CHARS = 2000
 _HUNK = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)")
 
 
-def parse_unified(text):
+def parse_unified(text: str) -> Diff:
     """Parse one file's unified diff (any number of hunks) into a Diff"""
-    lines = []
+    lines: List[Line] = []
     binary = False
     old_no = new_no = 0
     in_hunk = False
@@ -52,25 +72,25 @@ def parse_unified(text):
     return Diff(lines, binary)
 
 
-def runs(items, key):
+def runs(items: Sequence[Line], key: Callable[[Line], Key]) -> Iterator[Tuple[Key, int, int]]:
     """(key value, start, end) for each maximal run of consecutive items with the same key"""
     for value, group in groupby(enumerate(items), key=lambda pair: key(pair[1])):
         indexes = [i for i, _ in group]
         yield value, indexes[0], indexes[-1] + 1
 
 
-def change_blocks(lines):
+def change_blocks(lines: Sequence[Line]) -> List[Block]:
     """[(start, end)) index ranges of consecutive changed lines"""
     return [(start, end) for changed, start, end in runs(lines, lambda line: line.kind != " ") if changed]
 
 
-def counts(lines):
+def counts(lines: Sequence[Line]) -> Tuple[int, int]:
     """(insertions, deletions)"""
     tally = Counter(line.kind for line in lines)
     return tally["+"], tally["-"]
 
 
-def paired_lines(lines, block):
+def paired_lines(lines: Sequence[Line], block: Block) -> List[Tuple[int, int]]:
     """(deleted_index, inserted_index) pairs of a block with equal - and + counts"""
     start, end = block
     deleted = [i for i in range(start, end) if lines[i].kind == "-"]
@@ -80,15 +100,15 @@ def paired_lines(lines, block):
     return list(zip(deleted, inserted))
 
 
-def char_ranges(old, new):
+def char_ranges(old: str, new: str) -> Tuple[List[CharRange], List[CharRange]]:
     """Character ranges that differ: ([(a, b) in old], [(a, b) in new]); empty when too different or too long"""
     if len(old) + len(new) > CHAR_DIFF_MAX_CHARS:
         return [], []
     matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
     if matcher.quick_ratio() < CHAR_DIFF_MIN_RATIO or matcher.ratio() < CHAR_DIFF_MIN_RATIO:
         return [], []
-    old_ranges = []
-    new_ranges = []
+    old_ranges: List[CharRange] = []
+    new_ranges: List[CharRange] = []
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag in ("replace", "delete") and i2 > i1:
             old_ranges.append((i1, i2))
@@ -97,7 +117,7 @@ def char_ranges(old, new):
     return old_ranges, new_ranges
 
 
-def line_for_open(lines, index):
+def line_for_open(lines: Sequence[Line], index: int) -> int:
     """New-file line number to open for a row: a deleted row maps to the next surviving line"""
     if not lines:
         return 1

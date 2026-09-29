@@ -1,5 +1,6 @@
 """ Small helpers shared across vdiff modules """
 import logging
+from typing import Any, Callable, Optional
 
 import sublime
 
@@ -9,10 +10,10 @@ SETTINGS_FILE = "vDiff.sublime-settings"
 
 LOG = logging.getLogger("vdiff")
 
-_settings = None
+_settings: Optional[sublime.Settings] = None
 
 
-def settings():
+def settings() -> sublime.Settings:
     """Cached settings handle; a sublime Settings object stays live"""
     global _settings
     if _settings is None:
@@ -22,25 +23,25 @@ def settings():
     return _settings
 
 
-def apply_git_binary():
+def apply_git_binary() -> None:
     """Push the configured git executable into the (sublime-free) git module"""
     git.GIT_BINARY = settings().get("git_binary") or "git"
 
 
-def file_count(count):
+def file_count(count: int) -> str:
     """'1 file' / '3 files' for a message"""
     return f'{count} {"file" if count == 1 else "files"}'
 
 
-def status(message):
+def status(message: str) -> None:
     """Status-bar message with the plugin prefix"""
     sublime.status_message(f"vDiff: {message}")
 
 
-def run_async(work, done):
+def run_async(work: Callable[[], Any], done: Callable[[Any], None]) -> None:
     """Run `work()` on sublime's worker thread, hand the result to `done` on the main thread"""
 
-    def job():
+    def job() -> None:
         try:
             result = work()
         except Exception as error:
