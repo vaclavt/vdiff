@@ -114,9 +114,8 @@ class Window:
         return self.input_view
 
 
-# a bundled scheme's styles: the diff.* and region.* scopes defined, the plugin's vdiff.* ones not.
-# Nothing here simulates sublime merging in a written override, so a test that wants the plugin's
-# scopes to resolve has to say so by adding them.
+# a bundled scheme's styles: diff.* and region.* defined, the plugin's vdiff.* ones not. Nothing
+# simulates sublime merging an override, so a test wanting those to resolve adds them itself.
 DEFAULT_FG = "#ffffff"
 DEFAULT_STYLES = {
     "diff.deleted": {"foreground": DEFAULT_FG, "background": "#4a2b2b"},
@@ -246,8 +245,8 @@ class View:
     def extract_tokens_with_scopes(self, region):
         """One token per run of word characters and one per run of anything else, scoped by its shape
 
-        Enough shape for the colouring tests: real sublime returns the syntax's tokens, and all the
-        painter needs is that adjacent tokens differ and each maps to a scope with a colour.
+        Enough for the colouring tests: real sublime returns the syntax's tokens, but the painter only
+        needs adjacent tokens to differ and each to map to a coloured scope.
         """
         tokens = []
         text = self.text[region.a:region.b]

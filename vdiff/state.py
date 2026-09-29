@@ -34,10 +34,7 @@ def find_change(files: Sequence["FileChange"], path: Optional[str]) -> int:
 
 @dataclass(eq=False)
 class ViewState:
-    """Everything a review view needs to re-render itself and act on its file
-
-    `sha` is None in working-tree mode and the reviewed commit's hash otherwise.
-    """
+    """Everything a review view needs to re-render itself and act on its file"""
 
     repo: str
     sha: Optional[str] = None  # None in working-tree mode, the reviewed commit's hash otherwise
@@ -61,8 +58,8 @@ class ViewState:
     def index(self) -> int:
         """Position in `files` of the file being shown or loaded, or -1
 
-        `requested` leads: a diff arrives asynchronously, so counting from `change` alone would make
-        n / p step from whatever was on screen before the pending file landed.
+        `requested` leads: a diff arrives asynchronously, so counting from `change` would make n / p
+        step from what was on screen before the pending file landed.
         """
         change = self.requested or self.change
         return find_change(self.files, change.path) if change else -1

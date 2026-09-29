@@ -262,8 +262,8 @@ def _in_tree(repo: str, ref: str, path: str) -> bool:
 def full_diff(repo: str, path: str, sha: Optional[str] = None, untracked: bool = False) -> str:
     """Unified diff of one file with the whole file as context
 
-    Working tree vs HEAD (staged and unstaged merged) by default; a commit vs its
-    first parent when `sha` is given; the whole file as insertions when untracked.
+    Working tree vs HEAD by default (staged and unstaged merged), a commit vs its first parent with
+    `sha`, the whole file as insertions when untracked.
     """
     common = ["--no-color", "--no-ext-diff", FULL_CONTEXT]
     if untracked:
@@ -291,8 +291,7 @@ def head_message(repo: str) -> str:
 def amend(repo: str, message: str, allow_empty: bool = False) -> None:
     """Rewrite HEAD with `message`, folding in whatever is staged
 
-    `allow_empty` for a pure reword: git otherwise refuses an amend whose result carries no change,
-    which would fail on a commit that happens to be empty.
+    `allow_empty` for a pure reword: git refuses an amend carrying no change, failing on an empty commit.
     """
     run(repo, ["commit", "--amend"] + (["--allow-empty"] if allow_empty else []) + ["-m", message])
 

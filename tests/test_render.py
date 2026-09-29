@@ -37,8 +37,7 @@ def header(view):
 def with_loaded_override(view):
     """Model a view whose scheme has picked up the override palette.py writes
 
-    The stub deliberately does not simulate that merge, just as sublime does not until it restarts,
-    so a test wanting the generated colour scopes to resolve has to say so.
+    The stub no more simulates that merge than sublime does before a restart, so a test says so itself.
     """
     view.override_loaded = True
     return view
@@ -210,8 +209,8 @@ def test_keymap_matches_help_table():
 def test_no_binding_yields_to_vintage_command_mode():
     """The review view is read-only, so its letters are vdiff commands in either vim mode
 
-    init_view opens the view in command mode; a binding that still carried the old
-    `command_mode: false` context would go dead there, which is what broke n / p.
+    init_view opens in command mode; a binding still carrying the old `command_mode: false` context
+    would go dead there, which is what broke n / p.
     """
     guard = {"key": "setting.command_mode", "operand": False}
     for binding in keymap_bindings():
@@ -222,8 +221,7 @@ def test_no_binding_yields_to_vintage_command_mode():
 
 
 def test_minihtml_stylesheets_reject_unsupported_selectors():
-    """minihtml drops the rest of a stylesheet at a selector it cannot parse; these are the forms
-    that silently broke HELP_CSS, so no stylesheet constant may use them"""
+    """minihtml drops the rest of a stylesheet at an unparsable selector; these forms broke HELP_CSS"""
     # descendant/child/sibling combinators, pseudo-classes, attribute selectors, compound classes
     unsupported = re.compile(r"[\s:>~+\[]|[.#][^.#]*[.#]")
     sheets = [(name, css) for name, css in vars(render).items() if name.endswith("_CSS") and isinstance(css, str)]
@@ -351,8 +349,8 @@ def test_changed_lines_are_repainted_in_the_files_own_colours():
 
     keyword = view.styles["keyword"]["foreground"]
     punctuation = view.styles["punctuation.definition"]["foreground"]
-    # "    return 10" is an inserted line: its words carry the keyword colour, its spaces and digits
-    # are their own runs. Without this layer every one of them would be the tint's flat foreground.
+    # "    return 10" is inserted: its words carry the keyword colour, its spaces and digits their
+    # own runs. Without this layer all of them would be the tint's flat foreground.
     inserted = token_regions(view, "ins", keyword)
     assert sublime.Region(view.text_point(4, 4), view.text_point(4, 10)) in inserted
     # and a deleted line is painted from the deleted palette, not the inserted one
@@ -381,8 +379,8 @@ def test_token_layer_waits_for_the_scopes_to_resolve():
     render.init_view(view)
     render.render(view, make_state())
 
-    # sublime has not loaded the override yet, so the changed lines keep the scheme's flat tint and
-    # not one token key is painted: an unknown scope would draw its text in sublime's marker green
+    # the override is not loaded yet, so the lines keep the flat tint and no token key is painted:
+    # an unknown scope would draw its text in sublime's marker green
     assert view.regions[render.KEY_DEL][1] == "diff.deleted"
     assert view.regions[render.KEY_INS][1] == "diff.inserted"
     assert not [key for key in view.regions if key.startswith("vdiff.tok.")]

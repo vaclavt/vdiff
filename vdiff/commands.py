@@ -27,8 +27,8 @@ STATUS_COLOURS: Dict[str, int] = {
 }
 COMMIT_KIND = (sublime.KIND_ID_COLOR_BLUISH, "c", "commit")
 
-# a quick-panel row draws the annotation hard right on the subject's line; past this budget the
-# subject would run into it, so it is clipped. The floor keeps a readable stub on a narrow panel.
+# the annotation is drawn hard right of the subject, so past this budget the subject is clipped.
+# The floor keeps a readable stub on a narrow panel.
 COMMIT_ROW_WIDTH = 120
 MIN_SUBJECT_WIDTH = 24
 
@@ -193,8 +193,7 @@ def refresh_listing(view: sublime.View, st: ViewState, message: Optional[str] = 
                     pick: Optional[Callable[[List[FileChange], int], Optional[FileChange]]] = None) -> None:
     """Re-list the working tree changes and show the same file, or the next one when it is gone
 
-    `pick(files, index)` may name another file to show instead; `index` is where the shown file
-    sits in the new list, or the slot it left behind when it is gone.
+    `pick(files, index)` may name another file instead; `index` is the shown file's slot, new or vacated.
     """
     if message:
         status(message)
@@ -330,10 +329,7 @@ def _act_help(view: sublime.View, window: sublime.Window, st: ViewState) -> None
 def _git_action(verb: str, done_verb: str, operation: Callable[[str, FileChange], None],
                 confirm: Optional[Callable[[FileChange], bool]] = None,
                 pick: Optional[Callable[[List[FileChange], int], Optional[FileChange]]] = None) -> Action:
-    """Action running `operation(repo, change)` on the shown working-tree file, then re-listing
-
-    `pick` is handed to refresh_listing to choose which file to show afterwards.
-    """
+    """Run `operation(repo, change)` on the shown working-tree file, then re-list; `pick` goes to refresh_listing"""
 
     def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         if st.in_commit or st.change is None:
@@ -468,8 +464,7 @@ def _act_commit(view: sublime.View, window: sublime.Window, st: ViewState) -> No
 def _act_amend(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     """Rewrite HEAD's message in an input panel, folding in whatever is staged; Esc there cancels
 
-    The panel is one line, so only the subject is offered; the rest of the message rides along
-    verbatim. Nothing staged is fine - then the amend is a pure reword.
+    The one-line panel offers only the subject; the body rides along verbatim, and nothing staged is a reword.
     """
     if st.in_commit:
         status("amend works on uncommitted changes only")

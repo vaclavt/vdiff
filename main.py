@@ -1,6 +1,6 @@
 """ vDiff plugin entry point: review uncommitted changes and recent commits inside Sublime Text
 
-Sublime reloads a plugin only when this file changes; after editing a submodule, save this file to reload everything.
+Sublime reloads a plugin only when this file changes, so save it after editing a submodule.
 """
 import logging
 import sys
@@ -8,7 +8,7 @@ import sys
 import sublime
 
 # sublime reloads only this file: drop the submodules so an edited one is re-imported below.
-# Open review views lose their in-memory state and are rebuilt from their settings by _restore_all.
+# Open views lose in-memory state and are rebuilt from their settings by _restore_all.
 for _name in [n for n in sys.modules if n.startswith(__package__ + ".vdiff")]:
     del sys.modules[_name]
 

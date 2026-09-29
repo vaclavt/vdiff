@@ -329,8 +329,8 @@ def test_commit_items_fall_back_for_an_empty_subject():
 def loading(monkeypatch):
     """Queue run_async instead of running it inline, so a test can act mid-load like a user can
 
-    The stub runs set_timeout synchronously, which is why the real plugin's async window - the one
-    n / p used to read stale state through - is invisible to every other test in the suite.
+    The stub runs set_timeout synchronously, so the real async window — the one n / p read stale
+    state through — is invisible to every other test.
     """
     queue = []
     monkeypatch.setattr(commands, "run_async", lambda work, done: queue.append((work, done)))
@@ -522,8 +522,8 @@ def test_a_file_without_changes_neither_moves_nor_rings(rings):
 def press(monkeypatch, action, before, path, after):
     """Run `action` on `path` of `before`; git then reports `after`. Returns the paths shown
 
-    ACTIONS captured git.stage and friends when the table was built, so the subprocess is stubbed
-    one level down, at git.run; that keeps the real wiring of the action under test.
+    ACTIONS captured git.stage and friends at build time, so the stub goes one level down at git.run,
+    keeping the action's real wiring under test.
     """
     shown = []
     monkeypatch.setattr(commands.git, "run", lambda repo, args, ok_codes=(0,): "")

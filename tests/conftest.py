@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.join(HERE, "stubs"))
 def scheme_override_sandbox(tmp_path, monkeypatch):
     """Keep the colour-scheme override palette.py writes inside the test's own tmp_path
 
-    Both caches are per session and the stub hands every view the same id, so they would otherwise
-    leak between tests and make every assertion about the override depend on test order.
+    Both caches are per session and every stub view shares one id, so they would otherwise leak and
+    make override assertions depend on test order.
     """
     import sublime
 

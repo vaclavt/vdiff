@@ -27,17 +27,14 @@ REGION_KEYS: Tuple[str, ...] = (KEY_DEL, KEY_INS, KEY_DEL_GUTTER, KEY_INS_GUTTER
 PHANTOM_KEY = "vdiff.header"
 STATUS_KEY = "vdiff"
 
-# visual bell: a whole-buffer tint, erased on a timer. Deliberately not in REGION_KEYS, so the
-# re-render a wrap triggers does not wipe it before it has been seen.
+# visual bell: a whole-buffer tint on a timer. Not in REGION_KEYS, so a wrap's re-render cannot wipe it early.
 BELL_KEY = "vdiff.bell"
 BELL_MS = 90
 
-# above this much changed text, skip per-token colouring: a diff that large is scrolled, not read,
-# and tokenising every changed line would cost more than the colours are worth
+# above this much changed text the colours cost more than they are worth: such a diff is scrolled, not read
 TOKEN_COLOUR_MAX_CHARS = 200000
 
-# a block phantom anchored at point 0 is drawn below row 0, so row 0 stays empty and the file starts at row 1.
-# Only index_point / caret_index know about it.
+# a block phantom at point 0 draws below row 0, so the file starts at row 1; only index_point / caret_index know
 _HEADER_ROWS = 1
 
 # gutter dots use the scope's foreground
@@ -49,9 +46,8 @@ SCOPE_BELL = "region.yellowish"
 # sublime only loads an override it has not seen before on a restart
 NEEDS_RESTART = "restart Sublime Text to finish enabling syntax highlighting on changed lines"
 
-# one source for the status-bar hints and the ? popup.
-# actions: the ACTIONS names the row covers; a single one makes the row a link. short: status-bar
-# wording, "" keeps the row out of it. The group flag is False for groups needing a working-tree file.
+# actions: the ACTIONS names the row covers, a single one making it a link. short: status-bar
+# wording, "" keeps the row out. The group flag is False for groups needing a working-tree file.
 class Key(NamedTuple):
     """One row of the status-bar hints and the ? popup"""
 
@@ -127,10 +123,9 @@ a { text-decoration: none; padding: 0.15rem 0.5rem; margin-left: 0.3rem; border-
 .body { color: color(var(--foreground) alpha(0.6)); }
 """
 
-# minihtml stops applying a stylesheet at the first selector it cannot parse, and its documentation
-# covers properties only, not selectors: every rule here sticks to one bare element or one class,
-# the forms HEADER_CSS proves work. The first group's margin stands in for body's top padding, and
-# .kdim takes its colour from the .dim row around it.
+# minihtml drops the rest of a stylesheet at a selector it cannot parse, and documents properties
+# only, not selectors: every rule sticks to one bare element or class, the forms HEADER_CSS proves.
+# The first group's margin stands in for body's top padding; .kdim takes its colour from .dim.
 HELP_CSS = """
 body { margin: 0; padding: 0 0.8rem 0.6rem 0.8rem; }
 .group { margin-top: 0.6rem; color: var(--bluish); font-weight: bold; }
@@ -165,8 +160,8 @@ def init_view(view: sublime.View) -> None:
     s.set("show_definitions", False)
     s.set("mini_diff", False)
     s.set("spell_check", False)
-    # a read-only viewer, so vim's insert mode is meaningless: open in command mode with the block
-    # caret. vdiff's own keys carry no command_mode context, so they fire in either mode regardless.
+    # a read-only viewer, so vim's insert mode is meaningless: command mode, block caret. vdiff's
+    # own keys carry no command_mode context, so they fire in either mode regardless.
     s.set("command_mode", True)
     s.set("inverse_caret_state", True)
     view.set_scratch(True)
@@ -246,8 +241,7 @@ def render(view: sublime.View, st: ViewState) -> None:
     _apply_syntax(view, path if lines and not st.binary else None)
 
     if lines and not st.binary:
-        # here rather than in init_view: a session restore runs that while sublime is still settling,
-        # and the scheme colours we borrow read as absent that early
+        # here rather than init_view: during a session restore the scheme colours still read as absent
         palette.ensure(view)
         _paint_regions(view, st)
         if palette.claim_restart_notice(view):
@@ -285,9 +279,8 @@ def _paint_tokens(view: sublime.View, lines: Sequence[Line], starts: Sequence[in
                   char_regions: Sequence[sublime.Region]) -> None:
     """Repaint each run of same-coloured tokens with a scope carrying the tint *and* that colour
 
-    add_regions draws the text it covers in the region scope's own foreground, so the tints above have
-    just flattened every changed line to one colour. Nothing gives back the file's own highlighting
-    except handing each run the colour it should have had.
+    add_regions draws text in the region scope's own foreground, so the tints above have just
+    flattened every changed line; only handing each run its own colour gives the highlighting back.
     """
     if not palette.tokens_resolved(view):
         return
