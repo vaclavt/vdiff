@@ -4,7 +4,7 @@ import re
 
 import sublime  # the stub, via conftest
 
-from vdiff import commands, git, listeners, parse, render, state  # noqa: F401
+from vdiff import commands, git, listeners, palette, parse, render, state  # noqa: F401
 
 DIFF = """--- a/x.py
 +++ b/x.py
@@ -34,8 +34,18 @@ def header(view):
     return view.phantoms[render.PHANTOM_KEY][0].content
 
 
+def with_loaded_override(view):
+    """Model a view whose scheme has picked up the override palette.py writes
+
+    The stub deliberately does not simulate that merge, just as sublime does not until it restarts,
+    so a test wanting the generated colour scopes to resolve has to say so.
+    """
+    view.override_loaded = True
+    return view
+
+
 def test_render_text_regions_and_header():
-    view = sublime.View()
+    view = with_loaded_override(sublime.View())
     render.init_view(view)
     st = make_state()
     render.render(view, st)
@@ -316,9 +326,99 @@ def test_flash_survives_a_re_render(monkeypatch):
     assert render.BELL_KEY in view.regions
 
 
-def test_bell_scope_falls_back_when_the_scheme_lacks_it(monkeypatch):
-    view = sublime.View()
+def test_bell_scope_falls_back_when_the_scheme_lacks_it():
+    view = with_loaded_override(sublime.View())
     assert render._bell_scope(view) == render.SCOPE_BELL
-    monkeypatch.setattr(view, "style_for_scope", lambda scope: {"foreground": "#fff"})
-    # an invisible bell is a silent failure, so fall back to a scope the plugin guarantees
-    assert render._bell_scope(view) == render.SCOPE_INS
+    del view.styles["region.yellowish"]
+    # an invisible bell is a silent failure, so fall back to a scope that is resolving
+    assert render._bell_scope(view) == palette.SCOPE_INS
+    # ... and when the plugin's own scopes are not resolving either, to the scheme's
+    view.override_loaded = False
+    assert render._bell_scope(view) == "diff.inserted"
+
+
+def token_regions(view, kind, colour):
+    """The regions painted for one (background kind, colour) pair of the token layer"""
+    scope = palette.scope_for(kind, colour)
+    entry = view.regions.get(scope and scope.replace("vdiff.", "vdiff.tok.", 1))
+    return entry[0] if entry else []
+
+
+def test_changed_lines_are_repainted_in_the_files_own_colours():
+    view = with_loaded_override(sublime.View())
+    render.init_view(view)
+    render.render(view, make_state())
+
+    keyword = view.styles["keyword"]["foreground"]
+    punctuation = view.styles["punctuation.definition"]["foreground"]
+    # "    return 10" is an inserted line: its words carry the keyword colour, its spaces and digits
+    # are their own runs. Without this layer every one of them would be the tint's flat foreground.
+    inserted = token_regions(view, "ins", keyword)
+    assert sublime.Region(view.text_point(4, 4), view.text_point(4, 10)) in inserted
+    # and a deleted line is painted from the deleted palette, not the inserted one
+    assert sublime.Region(view.text_point(2, 4), view.text_point(2, 10)) in token_regions(view, "del", keyword)
+    assert token_regions(view, "del", punctuation)
+
+    # the plain tint still covers the whole line underneath, so gaps and line ends stay coloured
+    assert view.regions[render.KEY_INS][1] == palette.SCOPE_INS
+
+
+def test_token_runs_merge_but_stop_at_a_word_diff_range():
+    view = with_loaded_override(sublime.View())
+    render.init_view(view)
+    render.render(view, make_state("--- a/y\n+++ b/y\n@@ -1 +1 @@\n-foo = bar\n+foo = baz\n"))
+
+    keyword = view.styles["keyword"]["foreground"]
+    # only the changed character sits in the stronger tint; the rest of the word keeps the line tint
+    assert token_regions(view, "ins.char", keyword) == [sublime.Region(view.text_point(2, 8), view.text_point(2, 9))]
+    plain = token_regions(view, "ins", keyword)
+    assert sublime.Region(view.text_point(2, 6), view.text_point(2, 8)) in plain
+    assert sublime.Region(view.text_point(2, 0), view.text_point(2, 3)) in plain
+
+
+def test_token_layer_waits_for_the_scopes_to_resolve():
+    view = sublime.View()
+    render.init_view(view)
+    render.render(view, make_state())
+
+    # sublime has not loaded the override yet, so the changed lines keep the scheme's flat tint and
+    # not one token key is painted: an unknown scope would draw its text in sublime's marker green
+    assert view.regions[render.KEY_DEL][1] == "diff.deleted"
+    assert view.regions[render.KEY_INS][1] == "diff.inserted"
+    assert not [key for key in view.regions if key.startswith("vdiff.tok.")]
+
+
+def test_token_layer_is_skipped_for_a_diff_too_big_to_read(monkeypatch):
+    monkeypatch.setattr(render, "TOKEN_COLOUR_MAX_CHARS", 4)
+    view = with_loaded_override(sublime.View())
+    render.init_view(view)
+    render.render(view, make_state())
+
+    assert not [key for key in view.regions if key.startswith("vdiff.tok.")]
+
+
+def test_token_regions_are_dropped_when_a_re_render_no_longer_needs_them():
+    view = with_loaded_override(sublime.View())
+    render.init_view(view)
+    render.render(view, make_state())
+    assert [key for key in view.regions if key.startswith("vdiff.tok.")]
+
+    render.render(view, make_state("--- a/y\n+++ b/y\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"))
+    keyword = view.styles["keyword"]["foreground"]
+    # the new diff paints far fewer runs; the keys the old one used must not linger
+    assert token_regions(view, "ins", keyword) == [sublime.Region(view.text_point(3, 0), view.text_point(3, 1))]
+
+
+def test_restart_notice_when_the_override_cannot_take_effect_yet(monkeypatch):
+    said = []
+    monkeypatch.setattr(sublime, "status_message", said.append)
+    view = sublime.View()
+    render.init_view(view)
+    render.render(view, make_state())
+
+    assert said == ["vDiff: " + render.NEEDS_RESTART]
+    # said once per scheme, not once per render
+    render.render(view, make_state())
+    assert said == ["vDiff: " + render.NEEDS_RESTART]
+
+

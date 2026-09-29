@@ -5,6 +5,8 @@ insertions in green, in the file's own syntax highlighting. Stage, unstage or di
 to the real file at the caret's line.
 
 Install: symlink this directory into `Packages` as `vDiff` (Python 3.8 plugin host, no dependencies).
+On first use vDiff writes the scopes it paints changes with into `Packages/User/<your scheme>.sublime-color-scheme`;
+Sublime loads a scheme file it has not seen before only at startup, so restart it once to get the colours.
 
 Command Palette:
 

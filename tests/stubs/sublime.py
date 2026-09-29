@@ -1,4 +1,5 @@
 """ Minimal sublime API stub so the plugin modules import and header/regions logic runs offline """
+import re
 
 OP_EQUAL = 0
 OP_NOT_EQUAL = 1
@@ -109,6 +110,29 @@ class Window:
         return self.input_view
 
 
+# a bundled scheme's styles: the diff.* and region.* scopes defined, the plugin's vdiff.* ones not.
+# Nothing here simulates sublime merging in a written override, so a test that wants the plugin's
+# scopes to resolve has to say so by adding them.
+DEFAULT_FG = "#ffffff"
+DEFAULT_STYLES = {
+    "diff.deleted": {"foreground": DEFAULT_FG, "background": "#4a2b2b"},
+    "diff.deleted.char": {"foreground": DEFAULT_FG, "background": "#6a3535"},
+    "diff.inserted": {"foreground": DEFAULT_FG, "background": "#2b4a3a"},
+    "diff.inserted.char": {"foreground": DEFAULT_FG, "background": "#356a4a"},
+    "region.yellowish": {"foreground": "#e6db74", "background": "#4a4a2b"},
+    "markup.deleted": {"foreground": "#d64646"},
+    "markup.inserted": {"foreground": "#46d646"},
+    # a few of palette.PALETTE_PROBES, so the palette probe finds a working set of colours
+    "source": {"foreground": DEFAULT_FG},
+    "comment": {"foreground": "#7c8595"},
+    "string": {"foreground": "#99c794"},
+    "keyword": {"foreground": "#c594c5"},
+    "constant.numeric": {"foreground": "#f99157"},
+    "entity.name.function": {"foreground": "#6699cc"},
+    "punctuation.definition": {"foreground": "#5fb3b3"},
+}
+
+
 class View:
     """Text buffer with just the calls render.py makes"""
 
@@ -125,6 +149,10 @@ class View:
         self.commands = []
         self.popup = None
         self.popup_navigate = None
+        # what style_for_scope answers; a test reshapes it to model another colour scheme
+        self.styles = {scope: dict(style) for scope, style in DEFAULT_STYLES.items()}
+        # whether sublime has merged the override vdiff writes; it only does so on a restart
+        self.override_loaded = False
 
     def id(self):
         return 1
@@ -211,8 +239,25 @@ class View:
     def em_width(self):
         return 8.0
 
+    def extract_tokens_with_scopes(self, region):
+        """One token per run of word characters and one per run of anything else, scoped by its shape
+
+        Enough shape for the colouring tests: real sublime returns the syntax's tokens, and all the
+        painter needs is that adjacent tokens differ and each maps to a scope with a colour.
+        """
+        tokens = []
+        text = self.text[region.a:region.b]
+        for match in re.finditer(r"\w+|\s+|[^\w\s]+", text):
+            scope = "keyword" if match.group().isidentifier() else "punctuation.definition"
+            tokens.append((Region(region.a + match.start(), region.a + match.end()), scope))
+        return tokens
+
     def style_for_scope(self, scope):
-        return {"foreground": "#ffffff", "background": "#333333"}
+        # a fresh dict per call, and no background for an unknown scope, like the real API
+        if self.override_loaded and scope.startswith("vdiff.") and scope not in self.styles:
+            # sublime has merged the override, so every rule vdiff wrote in it resolves
+            return {"foreground": DEFAULT_FG, "background": "#333333"}
+        return dict(self.styles.get(scope, {"foreground": DEFAULT_FG}))
 
     def is_valid(self):
         return True

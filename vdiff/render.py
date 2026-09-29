@@ -1,6 +1,6 @@
 """ Draw a parsed diff into a review view: the file text, coloured line regions, gutter marks, header phantom """
+import bisect
 import html
-import json
 import logging
 import os
 from collections import namedtuple
@@ -8,10 +8,10 @@ from collections import namedtuple
 import sublime
 import sublime_plugin
 
-from . import parse
+from . import palette, parse
 from .git import STATUS_NAMES
 from .state import VIEW_FLAG
-from .utils import file_count, settings
+from .utils import file_count, settings, status
 
 LOG = logging.getLogger("vdiff")
 
@@ -31,28 +31,22 @@ STATUS_KEY = "vdiff"
 BELL_KEY = "vdiff.bell"
 BELL_MS = 90
 
+# above this much changed text, skip per-token colouring: a diff that large is scrolled, not read,
+# and tokenising every changed line would cost more than the colours are worth
+TOKEN_COLOUR_MAX_CHARS = 200000
+
 # a block phantom anchored at point 0 is drawn below row 0, so row 0 stays empty and the file starts at row 1.
 # Only index_point / caret_index know about it.
 _HEADER_ROWS = 1
 
-# scopes with a background in every bundled colour scheme (Mariana, Monokai, Breakers, Celeste, Sixteen)
-SCOPE_DEL = "diff.deleted"
-SCOPE_INS = "diff.inserted"
-SCOPE_DEL_CHAR = "diff.deleted.char"
-SCOPE_INS_CHAR = "diff.inserted.char"
 # gutter dots use the scope's foreground
 SCOPE_DEL_MARK = "markup.deleted"
 SCOPE_INS_MARK = "markup.inserted"
 # ST4 defines region.<colour>ish in every bundled scheme for exactly this kind of transient marking
 SCOPE_BELL = "region.yellowish"
 
-# rules written into a colour-scheme override when the active scheme lacks the scopes above
-FALLBACK_RULES = [
-    {"scope": SCOPE_DEL, "background": "hsla(357, 45%, 60%, 0.15)", "foreground_adjust": "l(+ 5%)"},
-    {"scope": SCOPE_DEL_CHAR, "background": "hsla(357, 60%, 60%, 0.30)", "foreground_adjust": "l(+ 10%)"},
-    {"scope": SCOPE_INS, "background": "hsla(114, 31%, 68%, 0.15)", "foreground_adjust": "l(+ 5%)"},
-    {"scope": SCOPE_INS_CHAR, "background": "hsla(114, 45%, 68%, 0.30)", "foreground_adjust": "l(+ 10%)"},
-]
+# sublime only loads an override it has not seen before on a restart
+NEEDS_RESTART = "restart Sublime Text to finish enabling syntax highlighting on changed lines"
 
 # one source for the status-bar hints and the ? popup.
 # actions: the ACTIONS names the row covers; a single one makes the row a link. short: status-bar
@@ -171,7 +165,6 @@ def init_view(view):
     if not view.name():
         view.set_name("vDiff")
     view.set_status(STATUS_KEY, KEY_HINTS)
-    ensure_scheme_scopes(view)
 
 
 def index_point(view, index, col=0):
@@ -208,13 +201,11 @@ def flash(view):
 
 
 def _bell_scope(view):
-    """region.yellowish, or a scope the plugin guarantees a background for when a scheme lacks it"""
-    try:
-        if view.style_for_scope(SCOPE_BELL).get("background"):
-            return SCOPE_BELL
-    except Exception:
-        LOG.debug("style_for_scope failed for %s", SCOPE_BELL, exc_info=True)
-    return SCOPE_INS
+    """region.yellowish, or a scope with a background we know of when a scheme lacks it"""
+    if palette.scope_background(view, SCOPE_BELL):
+        return SCOPE_BELL
+    # an invisible bell is a silent failure, so borrow the insert tint
+    return palette.SCOPE_INS
 
 
 def render_message(view, st, message):
@@ -243,25 +234,109 @@ def render(view, st):
     _apply_syntax(view, path if lines and not st.binary else None)
 
     if lines and not st.binary:
-        starts = _row_starts(lines)
-        deleted, inserted = _line_regions(lines, starts)
-        view.add_regions(KEY_DEL, deleted, SCOPE_DEL, flags=sublime.DRAW_NO_OUTLINE)
-        view.add_regions(KEY_INS, inserted, SCOPE_INS, flags=sublime.DRAW_NO_OUTLINE)
-        mark_flags = sublime.DRAW_NO_FILL | sublime.DRAW_NO_OUTLINE
-        del_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "-"]
-        ins_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "+"]
-        view.add_regions(KEY_DEL_GUTTER, del_marks, SCOPE_DEL_MARK, icon="dot", flags=mark_flags)
-        view.add_regions(KEY_INS_GUTTER, ins_marks, SCOPE_INS_MARK, icon="dot", flags=mark_flags)
-        if settings().get("word_diff", True):
-            del_chars, ins_chars = _char_regions(lines, st.blocks, starts)
-            view.add_regions(KEY_DEL_CHAR, del_chars, SCOPE_DEL_CHAR, flags=sublime.DRAW_NO_OUTLINE)
-            view.add_regions(KEY_INS_CHAR, ins_chars, SCOPE_INS_CHAR, flags=sublime.DRAW_NO_OUTLINE)
+        # here rather than in init_view: a session restore runs that while sublime is still settling,
+        # and the scheme colours we borrow read as absent that early
+        palette.ensure(view)
+        _paint_regions(view, st)
+        if palette.claim_restart_notice(view):
+            status(NEEDS_RESTART)
 
     ins, dele = parse.counts(lines)
     _finish(view, st, ins, dele, f"⟐ {os.path.basename(st.change.path)}")
     view.sel().clear()
     view.sel().add(sublime.Region(index_point(view, 0)))
     view.set_viewport_position((0, 0), False)
+
+
+def _paint_regions(view, st):
+    """The line tint, the gutter dots, the word-diff marks, and the syntax colours on top of them"""
+    lines = st.lines
+    starts = _row_starts(lines)
+    deleted, inserted = _line_regions(lines, starts)
+    view.add_regions(KEY_DEL, deleted, palette.SCOPE_DEL, flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_INS, inserted, palette.SCOPE_INS, flags=sublime.DRAW_NO_OUTLINE)
+    mark_flags = sublime.DRAW_NO_FILL | sublime.DRAW_NO_OUTLINE
+    del_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "-"]
+    ins_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "+"]
+    view.add_regions(KEY_DEL_GUTTER, del_marks, SCOPE_DEL_MARK, icon="dot", flags=mark_flags)
+    view.add_regions(KEY_INS_GUTTER, ins_marks, SCOPE_INS_MARK, icon="dot", flags=mark_flags)
+    del_chars, ins_chars = [], []
+    if settings().get("word_diff", True):
+        del_chars, ins_chars = _char_regions(lines, st.blocks, starts)
+        view.add_regions(KEY_DEL_CHAR, del_chars, palette.SCOPE_DEL_CHAR, flags=sublime.DRAW_NO_OUTLINE)
+        view.add_regions(KEY_INS_CHAR, ins_chars, palette.SCOPE_INS_CHAR, flags=sublime.DRAW_NO_OUTLINE)
+    _paint_tokens(view, lines, starts, del_chars + ins_chars)
+
+
+def _paint_tokens(view, lines, starts, char_regions):
+    """Repaint each run of same-coloured tokens with a scope carrying the tint *and* that colour
+
+    add_regions draws the text it covers in the region scope's own foreground, so the tints above have
+    just flattened every changed line to one colour. Nothing gives back the file's own highlighting
+    except handing each run the colour it should have had.
+    """
+    if not palette.tokens_resolved(view):
+        return
+    changed = [i for i, line in enumerate(lines) if line.kind != " "]
+    if sum(len(lines[i].text) for i in changed) > TOKEN_COLOUR_MAX_CHARS:
+        # a huge diff would spend longer being tokenised than read; the flat tint still shows it
+        return
+
+    stronger = sorted((r.a, r.b) for r in char_regions)
+    starts_of = [a for a, _ in stronger]
+    groups = {}
+    colours = {}  # scope name -> colour, resolved once per render
+    for i in changed:
+        kind = "del" if lines[i].kind == "-" else "ins"
+        end = starts[i] + len(lines[i].text)
+        # only this line's word-diff ranges, so a diff with thousands of them stays linear
+        on_line = stronger[bisect.bisect_left(starts_of, starts[i]):bisect.bisect_left(starts_of, end)]
+        for region, colour in _colour_runs(view, starts[i], lines[i].text, colours):
+            # a word-diff range cuts across token boundaries, so the run splits on it
+            for part, inside in _split(region, on_line):
+                # a colour outside the scheme's probed palette keeps the plain tint under it
+                scope = palette.scope_for(kind + ".char" if inside else kind, colour)
+                if scope:
+                    groups.setdefault(scope, []).append(part)
+    for scope, regions in groups.items():
+        view.add_regions(palette.token_key(scope), regions, scope, flags=sublime.DRAW_NO_OUTLINE)
+
+
+def _split(region, intervals):
+    """(part, inside) covering `region`, cut wherever one of the sorted `intervals` starts or ends"""
+    if not intervals:
+        return [(region, False)]
+    parts = []
+    pos = region.a
+    for a, b in intervals:
+        a, b = max(a, region.a), min(b, region.b)
+        if b <= pos:
+            continue
+        if a >= region.b:
+            break
+        if a > pos:
+            parts.append((sublime.Region(pos, a), False))
+        parts.append((sublime.Region(a, b), True))
+        pos = b
+    if pos < region.b or not parts:
+        parts.append((sublime.Region(pos, region.b), False))
+    return parts
+
+
+def _colour_runs(view, start, text, colours):
+    """(region, colour) per run of same-coloured tokens on one line, adjacent equal colours merged"""
+    runs = []
+    for region, scope in view.extract_tokens_with_scopes(sublime.Region(start, start + len(text))):
+        if scope not in colours:
+            colours[scope] = palette.foreground(view, scope)
+        colour = colours[scope]
+        if not colour:
+            continue
+        if runs and runs[-1][1] == colour and runs[-1][0].b == region.a:
+            runs[-1] = (sublime.Region(runs[-1][0].a, region.b), colour)
+        else:
+            runs.append((region, colour))
+    return runs
 
 
 def _finish(view, st, ins, dele, name):
@@ -279,7 +354,8 @@ def _replace(view, text):
         view.run_command("vdiff_replace", {"text": "\n" * _HEADER_ROWS + text})
     finally:
         view.set_read_only(True)
-    for key in REGION_KEYS:
+    # the token layer's keys vary with the palette, so they are listed rather than fixed
+    for key in list(REGION_KEYS) + palette.token_keys():
         view.erase_regions(key)
 
 
@@ -455,47 +531,3 @@ def show_help(view, st):
     em = view.em_width() or 8
     view.show_popup(help_html(st), location=-1, max_width=int(em * 56), max_height=int(em * 44), on_navigate=navigate)
 
-
-# --- colour scheme fallback -------------------------------------------------
-
-_scheme_checked = set()
-
-
-def ensure_scheme_scopes(view):
-    """Write a scheme override with diff backgrounds when the active scheme has none (third-party schemes)"""
-    name = _scheme_override_name(view)
-    if not name or name in _scheme_checked:
-        return
-    _scheme_checked.add(name)
-    try:
-        if view.style_for_scope(SCOPE_INS).get("background"):
-            return
-    except Exception:
-        return
-    path = os.path.join(sublime.packages_path(), "User", name)
-    try:
-        scheme = {}
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                scheme = sublime.decode_value(f.read()) or {}
-        rules = scheme.setdefault("rules", [])
-        present = {rule.get("scope") for rule in rules}
-        rules.extend(rule for rule in FALLBACK_RULES if rule["scope"] not in present)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(scheme, f, indent=4)
-        LOG.info("wrote diff scopes into colour scheme override %s", path)
-    except Exception:
-        LOG.warning("could not write colour scheme override %s", path, exc_info=True)
-
-
-def _scheme_override_name(view):
-    """File name in Packages/User that overrides the active scheme (same base name, .sublime-color-scheme)"""
-    try:
-        # already resolved through "auto" and dark/light settings by sublime
-        name = sublime.ui_info()["color_scheme"]["resolved_value"]
-    except Exception:
-        name = view.settings().get("color_scheme") or ""
-    if not name or name == "auto":
-        return None
-    root, _ = os.path.splitext(os.path.basename(name))
-    return root + ".sublime-color-scheme"
