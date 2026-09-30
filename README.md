@@ -9,7 +9,8 @@ Python 3.14. No dependencies.
 
 ## Install with Package Control
 
-vDiff is not on the default channel, so add this one first. Open
+vDiff is distributed through the shared channel at
+[vaclavt/sublime-chanel](https://github.com/vaclavt/sublime-chanel), not the default one. Open
 **Preferences → Package Settings → Package Control → Settings** and put the channel URL in the
 `channels` array of the right-hand (User) pane:
 
@@ -17,7 +18,7 @@ vDiff is not on the default channel, so add this one first. Open
 {
     "channels": [
         "https://packagecontrol.io/channel_v3.json",
-        "https://raw.githubusercontent.com/vaclavt/vdiff/main/channel.json"
+        "https://raw.githubusercontent.com/vaclavt/sublime-chanel/main/channel.json"
     ]
 }
 ```
@@ -65,43 +66,13 @@ The header links do the same with the mouse. Settings: `vDiff.sublime-settings`.
 
 ## The channel
 
-Two files in this repository feed Package Control, and the distinction between them matters:
+`repository.json` in this repository is a Package Control **repository** file: its top-level key
+is `packages`, and it describes vDiff itself — where the code lives and which releases exist.
+`"tags": true` means Package Control reads the repository's git tags, so publishing a release is
+just `git tag v1.0.1 && git push --tags`. A package whose tags are all unpushed resolves to zero
+releases, and Package Control drops it from the list without an error — if vDiff is missing from
+**Install Package**, check the tags reached GitHub.
 
-- `repository.json` — a **repository** file. Its top-level key is `packages`, and it describes
-  vDiff itself: where the code lives and which releases exist. `"tags": true` means Package
-  Control reads the repository's git tags, so publishing a release is just
-  `git tag v1.0.1 && git push --tags`. A package whose tags are all unpushed resolves to zero
-  releases, and Package Control drops it from the list without an error — if vDiff is missing
-  from **Install Package**, check the tags reached GitHub.
-- `channel.json` — a **channel** file. Its top-level key is `repositories`, and it is nothing but
-  a list of repository-file URLs. This is the one users add to `channels`.
-
-The indirection is what makes a channel worth having: users add one URL once, and every package
-you later append to `repositories` shows up in their **Install Package** list without them
-changing anything.
-
-### Adding another package to the channel
-
-Append the URL of that package's *repository* file to `repositories` in `channel.json`:
-
-```json
-{
-    "$schema": "sublime://packagecontrol.io/schemas/channel",
-    "schema_version": "4.0.0",
-    "repositories": [
-        "https://raw.githubusercontent.com/vaclavt/vdiff/main/repository.json",
-        "https://raw.githubusercontent.com/vaclavt/vAI/main/channel.json"
-    ]
-}
-```
-
-Two things to watch:
-
-- The URL must be a repository file (top-level `packages`), whatever it is named. vAI's
-  `channel.json` is a repository file despite its name, so it belongs in a `repositories` array —
-  Package Control rejects any file without a `repositories` key when it is listed under `channels`.
-- Package Control fetches anonymously over HTTPS, so the URL has to be publicly readable. A
-  package on a private host is not installable this way.
-
-If you would rather skip the channel for a single package, a repository file can be added directly
-to the `repositories` array of Package Control's settings instead.
+The channel itself — the `channels`-array file listing `repository.json` for vDiff and vaclavt's
+other packages — lives in [vaclavt/sublime-chanel](https://github.com/vaclavt/sublime-chanel), not
+here. Add a package there instead of in this repository.
