@@ -49,7 +49,18 @@ def test_render_text_regions_and_header():
     st = make_state()
     render.render(view, st)
 
-    assert view.text.split("\n") == ["", "def f():", "    return 1", "", "    return 10", "    # added", "    # more", "", "def g():", "    pass"]
+    assert view.text.split("\n") == [
+        "",
+        "def f():",
+        "    return 1",
+        "",
+        "    return 10",
+        "    # added",
+        "    # more",
+        "",
+        "def g():",
+        "    pass",
+    ]
     assert view.is_read_only()
     assert view.syntax.endswith("Python.sublime-syntax")
 
@@ -141,9 +152,9 @@ def test_help_popup_lists_every_key():
     view, html = help_popup(st)
 
     assert view.is_popup_visible()
-    for group in ("Navigate", "Panels", "Actions", "View"):
+    for group in ("Navigate", "Actions", "View"):
         assert f">{group}<" in html
-    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C", "m", "r", "?", "esc"):
+    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C", "m", "r", "z", "esc"):
         assert f">{keys}<" in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
@@ -151,8 +162,8 @@ def test_help_popup_lists_every_key():
     assert 'href="stage"' in html and 'href="files"' in html and 'href="close"' in html
     # rows covering two actions stay plain text
     assert 'href="next_change"' not in html
-    # the status bar advertises it too
-    assert "? keys" in view.status[render.STATUS_KEY]
+    # the popup does not list the key that opens it
+    assert ">?<" not in html
 
 
 def test_help_popup_dims_file_actions_in_commit_mode():
@@ -199,11 +210,12 @@ def test_keymap_matches_help_table():
     assert all(b["command"] == "vdiff_action" for b in bindings)
     bound = {b["args"]["action"] for b in bindings}
     listed = {action for k in render.KEYS for action in k.actions}
-    assert bound == set(commands.ACTIONS) == listed
+    # "?" opens the popup, so the popup leaves it out
+    assert bound == set(commands.ACTIONS) == listed | {"help"}
 
     # rebinding a key without updating the table would leave the popup and status bar lying
     bound_keys = {DISPLAY_KEYS.get(key, key) for b in bindings for key in b["keys"]}
-    assert bound_keys == {token for k in render.KEYS for token in k.keys.split()}
+    assert bound_keys == {token for k in render.KEYS for token in k.keys.split()} | {"?"}
 
 
 def test_no_binding_yields_to_vintage_command_mode():
@@ -418,5 +430,3 @@ def test_restart_notice_when_the_override_cannot_take_effect_yet(monkeypatch):
     # said once per scheme, not once per render
     render.render(view, make_state())
     assert said == ["vDiff: " + render.NEEDS_RESTART]
-
-

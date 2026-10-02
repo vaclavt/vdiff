@@ -1,4 +1,4 @@
-""" Event listener: state cleanup, refresh when the tab comes back or a file is saved """
+"""Event listener: state cleanup, refresh when the tab comes back or a file is saved"""
 import sublime
 import sublime_plugin
 
@@ -8,6 +8,7 @@ from .commands import refresh_if_changed, restore_view
 
 class VdiffEventListener(sublime_plugin.EventListener):
     def on_pre_close(self, view: sublime.View) -> None:
+        """Forget the closing view's state"""
         state.drop(view)
 
     def on_activated(self, view: sublime.View) -> None:

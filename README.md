@@ -57,12 +57,15 @@ Use one method or the other, not both: an unpacked `Packages/vDiff` directory ov
 | `o` or Enter | open the real file at this line |
 | `]` / `[` | next / previous change (wraps at the ends) |
 | `n` / `p` | next / previous file of the current list (wraps at the ends) |
+| `v` | switch between the file-by-file and all-files views |
+| `left` / `right` | collapse / expand the file under the caret in the all-files view |
+| `z` | collapse all files in the all-files view, or expand them all when every one is collapsed |
 | `j` / `k` | move down / up one line (vim keys) |
 | `r` | refresh |
 | `?` | show this key list in a popup |
 | Esc | close the view |
 
-The header links do the same with the mouse. Settings: `vDiff.sublime-settings`.
+The header links do the same with the mouse. The all-files view shows five context lines around each change by default; configure this with `all_files_context` in `vDiff.sublime-settings`.
 
 ## The channel
 

@@ -1,11 +1,11 @@
-""" The colour-scheme scopes vDiff paints changed lines with, provisioned into a scheme override
+"""The colour-scheme scopes vDiff paints changed lines with, provisioned into a scheme override
 
 view.add_regions repaints text with the region scope's foreground, so one scope cannot give both a
 red/green background and the file's syntax colours. This module generates a scope per (background
 kind, colour) pair carrying both, and render paints each run of same-coloured tokens with it.
 
 Sublime picks up a new override only on a restart, so the palette is probed and written in one pass
-rather than a colour at a time.
+rather than a colour at a time
 """
 import json
 import logging
@@ -16,16 +16,28 @@ import sublime
 
 LOG = logging.getLogger("vdiff")
 
-# the full-line tint under the token layer, the scheme's own: the token layer repaints the text on
-# top so the tint's foreground never shows, and a scope the scheme defines needs no restart.
+# tints under the token layer: the scheme's own diff scopes need no restart, and the token layer repaints their text
 SCOPE_DEL = "diff.deleted"
 SCOPE_INS = "diff.inserted"
 SCOPE_DEL_CHAR = "diff.deleted.char"
 SCOPE_INS_CHAR = "diff.inserted.char"
+# context rows of the all-files view: the editor background, nudged so the colour still paints
+SCOPE_CTX = "vdiff.context"
 
-# background kinds, and the tint each one draws over
-KINDS: Tuple[str, ...] = ("del", "ins", "del.char", "ins.char")
-KIND_TINT: Dict[str, str] = {"del": SCOPE_DEL, "ins": SCOPE_INS, "del.char": SCOPE_DEL_CHAR, "ins.char": SCOPE_INS_CHAR}
+# background kinds (tinted ones paint changed lines, "ctx" the all-files context rows) and their tint scopes
+TINT_KINDS: Tuple[str, ...] = ("del", "ins", "del.char", "ins.char")
+KINDS: Tuple[str, ...] = TINT_KINDS + ("ctx",)
+KIND_TINT: Dict[str, str] = {"del": SCOPE_DEL, "ins": SCOPE_INS, "del.char": SCOPE_DEL_CHAR, "ins.char": SCOPE_INS_CHAR,
+                             "ctx": SCOPE_CTX}
+
+# all-files file heading and its -/+ counts; the colours are user-requested
+SCOPE_FILE_HEADER = "vdiff.file.header"
+SCOPE_FILE_DEL_COUNT = "vdiff.file.del.count"
+SCOPE_FILE_INS_COUNT = "vdiff.file.ins.count"
+FILE_HEADER_BACKGROUND = "#0000FF"
+# sublime's former markup.deleted / markup.inserted colours
+FILE_DEL_FOREGROUND = "#d64646"
+FILE_INS_FOREGROUND = "#46d646"
 
 # tints to provision when the active scheme defines none of its own (some third-party schemes)
 FALLBACK_TINTS: Dict[str, str] = {
@@ -35,9 +47,8 @@ FALLBACK_TINTS: Dict[str, str] = {
     SCOPE_INS_CHAR: "hsla(114, 45%, 68%, 0.30)",
 }
 
-# scope roots to probe for the scheme's palette: schemes colour by these standard names, so one pass
-# yields the working set. No API returns a scheme's palette — style_for_scope takes one scope at a
-# time, and reading the file would mean re-implementing sublime's override and .tmTheme merging.
+# standard scope roots probed for the palette; no API returns it whole, and parsing the scheme
+# file would mean re-doing sublime's merging
 PALETTE_PROBES: Tuple[str, ...] = (
     "source",
     "comment",
@@ -71,7 +82,7 @@ PALETTE_PROBES: Tuple[str, ...] = (
 _palettes: Dict[str, Dict[str, int]] = {}
 # the override name the last ensure() resolved, so scope_for knows which palette to read
 _active: Optional[str] = None
-# schemes the reader has already been told need a restart
+# schemes the user has already been told need a restart
 _notified: Set[Optional[str]] = set()
 
 
@@ -84,22 +95,23 @@ def reset() -> None:
 
 
 def claim_restart_notice(view: sublime.View) -> bool:
-    """Whether the reader still has to be told to restart, asked once per scheme
+    """Whether to tell the user to restart; True at most once per scheme
 
-    True only when a restart helps — provisioned but not yet loaded; it cannot fix one we never wrote.
+    Only when the override is written but not yet loaded
     """
-    if not (_active and _palettes.get(_active)) or tokens_resolved(view) or _active in _notified:
+    if not (_active and _palettes.get(_active)) or tokens_resolved(view, KINDS) or _active in _notified:
         return False
     _notified.add(_active)
     return True
 
 
 def scope_background(view: sublime.View, scope: str) -> Optional[str]:
-    """The scheme's background for a scope, or None; style_for_scope can fail on a closing view"""
+    """The scheme's background for a scope, or None"""
     return _style(view, scope).get("background")
 
 
 def _style(view: sublime.View, scope: str) -> Dict[str, Any]:
+    """The scheme's style for a scope, or {} when style_for_scope fails"""
     try:
         return view.style_for_scope(scope)
     except Exception:
@@ -112,17 +124,24 @@ def foreground(view: sublime.View, scope: str) -> Optional[str]:
     return _style(view, scope).get("foreground")
 
 
-def tokens_resolved(view: sublime.View) -> bool:
+def tokens_resolved(view: sublime.View, kinds: Tuple[str, ...] = TINT_KINDS) -> bool:
     """Whether the generated (tint + colour) scopes are live
 
     The token layer must never paint with a scope sublime does not know: it would draw that text in
-    sublime's unknown-scope green. A new override loads only on a restart, so the writing session sees false.
+    sublime's unknown-scope green. A new override loads only on a restart, so the writing session sees false
     """
     colours = (_active and _palettes.get(_active)) or {}
     if not colours:
         return False
-    # they are all written by the same pass into the same file, so any one of them answers for all
-    return bool(scope_background(view, _scope_name(KINDS[0], next(iter(colours.values())))))
+    # a kind added since the override was written loads only after a restart, so check each kind
+    # probe a colour unlike the default foreground (an unknown scope falls back to it);
+    # ctx's background may go unreported
+    default = foreground(view, "text.plain")
+    colour, index = next(((c, i) for c, i in colours.items() if c != default), next(iter(colours.items())))
+    # live when the rule's background shows, or its distinct foreground does
+    return all(scope_background(view, _scope_name(kind, index)) or
+               (colour != default and foreground(view, _scope_name(kind, index)) == colour)
+               for kind in kinds)
 
 
 def scope_for(kind: str, colour: str) -> Optional[str]:
@@ -132,7 +151,7 @@ def scope_for(kind: str, colour: str) -> Optional[str]:
 
 
 def token_key(scope: str) -> str:
-    """The add_regions key for a generated scope; one naming rule, spelled here only"""
+    """The add_regions key for a generated scope"""
     return scope.replace("vdiff.", "vdiff.tok.", 1)
 
 
@@ -143,28 +162,30 @@ def token_keys() -> List[str]:
 
 
 def _scope_name(kind: str, index: int) -> str:
+    """Generated scope name for a background kind and palette index"""
     return f"vdiff.{kind}.c{index}"
 
 
 def ensure(view: sublime.View) -> None:
     """Provision the scopes for the active scheme, once per scheme per session
 
-    Whether they have taken effect is tokens_resolved()'s question: a new override loads only on a restart.
+    A new override loads only on a restart; tokens_resolved() says when it is live
     """
     global _active
     name = override_name(view)
     _active = name
     if not name or name in _palettes:
         return
+    # merge into the existing override, if any
     path = os.path.join(sublime.packages_path(), "User", name)
     try:
         scheme: Dict[str, Any] = {}
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                # a hand-edited scheme may hold comments decode_value rejects: the raise leaves the
-                # file untouched, and render still shows the changed lines
+                # invalid JSON raises here, leaving the file untouched; render still shows the changed lines
                 scheme = sublime.decode_value(f.read()) or {}
         rules = scheme.setdefault("rules", [])
+        # probe the scheme, record the palette, and write only when a rule changed
         tints = _tints(view)
         colours = {colour: i for i, colour in enumerate(_probe_palette(view))}
         _palettes[name] = colours
@@ -176,6 +197,7 @@ def ensure(view: sublime.View) -> None:
         LOG.info("provisioned %d colours into colour scheme override %s", len(colours), path)
     except Exception:
         LOG.warning("could not write colour scheme override %s", path, exc_info=True)
+        # mark the scheme as handled so this session does not retry it
         _palettes.setdefault(name, {})
 
 
@@ -192,7 +214,7 @@ def _probe_palette(view: sublime.View) -> List[str]:
 def _tints(view: sublime.View) -> Dict[str, str]:
     """{tint scope: background} for the scheme's diff colours, falling back to ours per colour pair
 
-    All or nothing per pair: taking only the half a scheme defines would put our hue next to its own.
+    All or nothing per pair: taking only the half a scheme defines would put our hue next to its own
     """
     tints: Dict[str, str] = {}
     for line_scope, char_scope in ((SCOPE_DEL, SCOPE_DEL_CHAR), (SCOPE_INS, SCOPE_INS_CHAR)):
@@ -200,23 +222,68 @@ def _tints(view: sublime.View) -> Dict[str, str]:
         char = scope_background(view, char_scope)
         tints[line_scope] = line if line and char else FALLBACK_TINTS[line_scope]
         tints[char_scope] = char if line and char else FALLBACK_TINTS[char_scope]
+    # a region whose background is missing, transparent or equal to the editor's is filled with its
+    # foreground, so context colours carry the editor background nudged by an invisible step
+    tints[SCOPE_CTX] = _nudge(_global_background(view))
     return tints
+
+
+def _global_background(view: sublime.View) -> str:
+    """The scheme's editor background; style_for_scope reports none for scopes that do not set one"""
+    try:
+        background = view.style().get("background")
+    except Exception:
+        LOG.debug("view.style failed", exc_info=True)
+        background = None
+    return background or "#000000"
+
+
+def _nudge(colour: str) -> str:
+    """#rrggbb[aa] with blue moved one step, towards the middle so it never overflows"""
+    if not (colour.startswith("#") and len(colour) in (7, 9)):
+        return colour
+    blue = int(colour[5:7], 16)
+    return f"{colour[:5]}{blue + 1 if blue < 128 else blue - 1:02x}{colour[7:]}"
 
 
 def _merge_rules(rules: List[Dict[str, str]], tints: Dict[str, str], colours: Dict[str, int],
                  view: sublime.View) -> bool:
     """Bring the scheme's rules up to date, in place; True when anything changed
 
-    add_regions draws text in the region scope's own foreground, so each (kind, colour) pair needs a
-    rule carrying both; a background alone would flatten the line. Plain tints are written only when
-    the scheme has none, and never overwritten, so a hand-tuned one survives.
+    Each (kind, colour) rule carries a background and a foreground, as a background alone would flatten
+    the line's colours; plain tints are added only when missing and never overwritten, so a hand-tuned one survives
     """
     present = {rule.get("scope"): rule for rule in rules}
     changed = False
+    # the all-files file heading
+    header = present.get(SCOPE_FILE_HEADER)
+    wanted_header = {"scope": SCOPE_FILE_HEADER, "background": FILE_HEADER_BACKGROUND}
+    if header is None:
+        rules.append(wanted_header)
+        changed = True
+    elif header != wanted_header:
+        header.clear()
+        header.update(wanted_header)
+        changed = True
+    # its deletion and insertion counts
+    for scope, foreground in ((SCOPE_FILE_DEL_COUNT, FILE_DEL_FOREGROUND),
+                              (SCOPE_FILE_INS_COUNT, FILE_INS_FOREGROUND)):
+        count_rule = present.get(scope)
+        wanted_count = {"scope": scope, "background": FILE_HEADER_BACKGROUND,
+                        "foreground": foreground, "font_style": "bold"}
+        if count_rule is None:
+            rules.append(wanted_count)
+            changed = True
+        elif count_rule != wanted_count:
+            count_rule.clear()
+            count_rule.update(wanted_count)
+            changed = True
+    # plain tints the scheme lacks; the context tint gets no rule of its own
     for scope, background in tints.items():
-        if scope not in present and not scope_background(view, scope):
+        if scope != SCOPE_CTX and scope not in present and not scope_background(view, scope):
             rules.append({"scope": scope, "background": background})
             changed = True
+    # one rule per (kind, colour) pair
     for colour, index in colours.items():
         for kind in KINDS:
             wanted = {"scope": _scope_name(kind, index), "background": tints[KIND_TINT[kind]],
@@ -240,6 +307,7 @@ def override_name(view: sublime.View) -> Optional[str]:
         name = sublime.ui_info()["color_scheme"]["resolved_value"]
     except Exception:
         name = view.settings().get("color_scheme") or ""
+    # no usable scheme name: nothing to override
     if not name or name == "auto":
         return None
     root, _ = os.path.splitext(os.path.basename(name))

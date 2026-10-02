@@ -224,7 +224,17 @@ class View:
     def set_status(self, key, value):
         self.status[key] = value
 
+    def window(self):
+        # detached: the all-files view then skips tokenising in a hidden panel
+        return None
+
+    def viewport_position(self):
+        return (0, 0)
+
     def set_viewport_position(self, xy, animate=True):
+        pass
+
+    def show(self, point):
         pass
 
     def show_at_center(self, point):

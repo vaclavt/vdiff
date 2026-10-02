@@ -11,6 +11,9 @@
     // mark the changed characters inside paired deleted/inserted lines
     "word_diff": true,
 
+    // number of unchanged lines shown around each change in the all-files view
+    "all_files_context": 5,
+
     // git executable; sublime's PATH may not include a user-installed git
     "git_binary": "git",
 

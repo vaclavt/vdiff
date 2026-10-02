@@ -1,4 +1,4 @@
-""" Git access: every call is one subprocess; results are plain tuples, no sublime imports (testable) """
+"""Git access via subprocess; results are plain tuples, no sublime imports (testable)"""
 import os
 import re
 import subprocess
@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, NamedTuple, Sequence, Tuple
 
 
 class FileChange(NamedTuple):
-    """path, one-letter status (M A D R ?), staged flag, numstat counts (None for binary), rename source"""
+    """Path, one-letter status (see STATUS_NAMES), staged flag, numstat counts (None for binary), rename source"""
 
     path: str
     status: str
@@ -17,7 +17,7 @@ class FileChange(NamedTuple):
 
 
 class Commit(NamedTuple):
-    """shortstat totals; all three are None when git prints no diffstat (merges, empty commits)"""
+    """One log entry, date relative; files/insertions/deletions are None without a diffstat (merges, empty commits)"""
 
     sha: str
     short: str
@@ -30,6 +30,8 @@ class Commit(NamedTuple):
 
 
 class CommitInfo(NamedTuple):
+    """One commit: its hashes, author, date, subject and body"""
+
     sha: str
     short: str
     author: str
@@ -69,9 +71,10 @@ _SHORTSTAT = re.compile(r"\s*(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(
 
 
 class GitError(Exception):
-    """git exited with an unexpected code; str() is the first stderr line, `stderr` the whole of it"""
+    """Git exited with an unexpected code; str() is the first stderr line, `stderr` the whole of it"""
 
     def __init__(self, stderr: str, code: int) -> None:
+        """Keep stderr and the exit code"""
         self.stderr = stderr
         self.code = code
         first = stderr.strip().splitlines()
@@ -91,9 +94,11 @@ def repo_root(path: Optional[str]) -> Optional[str]:
     """Top-level directory of the repository containing `path`, or None"""
     if not path:
         return None
+    # start from the directory itself, or the file's parent
     directory = path if os.path.isdir(path) else os.path.dirname(path)
     if not os.path.isdir(directory):
         return None
+    # outside a repository git fails, which reads as None
     try:
         root = run(directory, ["rev-parse", "--show-toplevel"]).strip()
     except (GitError, OSError):
@@ -116,13 +121,14 @@ def base_ref(repo: str) -> str:
 
 
 def _int_or_none(value: str) -> Optional[int]:
-    """A numstat count: "-" marks a binary file"""
+    """A numstat count as int, None for "-" (binary)"""
     return None if value == "-" else int(value)
 
 
 def _parse_numstat(text: str) -> Dict[str, Numstat]:
     """`--numstat -z` output -> {path: (insertions, deletions, old_path)}"""
     result: Dict[str, Numstat] = {}
+    # each NUL field is one "insertions<TAB>deletions<TAB>path" entry
     fields = iter(text.split("\0"))
     for entry in fields:
         parts = entry.split("\t")
@@ -141,6 +147,7 @@ def _parse_numstat(text: str) -> Dict[str, Numstat]:
 def _parse_name_status(text: str) -> List[Tuple[str, str, Optional[str]]]:
     """`--name-status -z` output -> [(status letter, path, old_path)]"""
     result: List[Tuple[str, str, Optional[str]]] = []
+    # a status field, then its path; a rename or copy adds the new path after the old one
     fields = iter(text.split("\0"))
     for status in fields:
         if not status:
@@ -157,11 +164,13 @@ def _count_lines(path: str) -> Optional[int]:
     """Line count of a working-tree file, None when binary or unreadable"""
     try:
         with open(path, "rb") as f:
+            # a NUL in the first 8000 bytes marks a binary file
             head = f.read(8000)
             if b"\0" in head:
                 return None
             count = head.count(b"\n")
             last = head[-1:]
+            # the rest in 1 MiB chunks, remembering the final byte
             while True:
                 chunk = f.read(1 << 20)
                 if not chunk:
@@ -170,6 +179,7 @@ def _count_lines(path: str) -> Optional[int]:
                 last = chunk[-1:]
     except OSError:
         return None
+    # an empty file has no lines; a last line without a newline still counts
     if not last:
         return 0
     return count + (0 if last == b"\n" else 1)
@@ -183,6 +193,7 @@ def changed_files(repo: str) -> List[FileChange]:
     base = EMPTY_TREE if "# branch.oid (initial)" in entries else "HEAD"
     counts = _parse_numstat(run(repo, ["diff", "--numstat", "-z", "--no-renames", base]))
 
+    # "1" ordinary, "u" unmerged, "?" untracked entries; anything else (branch headers) is skipped
     changes: List[FileChange] = []
     for entry in entries:
         kind = entry[0]
@@ -195,9 +206,11 @@ def changed_files(repo: str) -> List[FileChange]:
             xy, path = ".?", entry[2:]
         else:
             continue
+        # any index change means staged; the worktree letter wins over the index letter
         x, y = xy[0], xy[1]
         staged = x not in (".", "?")
         letter = y if y != "." else x
+        # untracked files have no numstat: their lines count as insertions
         if letter == "?":
             lines = _count_lines(os.path.join(repo, path))
             ins, dele, old = lines, (None if lines is None else 0), None
@@ -212,8 +225,9 @@ def recent_commits(repo: str, count: int) -> List[Commit]:
     """Last `count` commits, newest first; empty list without commits"""
     if not has_head(repo):
         return []
-    # --shortstat rides along on the same call: one subprocess, totals for free
+    # --shortstat adds per-commit totals to the same call
     text = run(repo, ["log", "-n", str(count), "--format=%H%x1f%h%x1f%an%x1f%ar%x1f%s", "--shortstat"])
+    # a five-field line starts a commit; the shortstat line after it fills in its totals
     commits: List[Commit] = []
     for line in text.split("\n"):
         parts = line.split("\x1f")
@@ -233,14 +247,16 @@ def commit_with_files(repo: str, sha: str) -> Tuple[CommitInfo, List[FileChange]
     """(CommitInfo, [FileChange]) of one commit vs its first parent, files sorted by path; two git calls"""
     show = ["show", "--first-parent", "-m", "-z"]
     text = run(repo, show + [f"--format={_INFO_FORMAT}%x00", _DATE_FORMAT, "--name-status", sha])
-    # git terminates the header with its own NUL and a newline before the file list
+    # our %x00 ends the header; strip the separator git adds before the file list
     info_text, _, files_text = text.partition("\0")
     files_text = files_text.lstrip("\0\n")
+    # pad missing trailing fields so CommitInfo always gets six
     parts = info_text.split("\x1f")
     while len(parts) < 6:
         parts.append("")
     info = CommitInfo(*parts[:6])
 
+    # second call: per-file counts, matched to the name-status list by path
     counts = _parse_numstat(run(repo, show + ["--format=", "--numstat", sha]))
     changes: List[FileChange] = []
     for status, path, old_path in _parse_name_status(files_text):
@@ -263,9 +279,10 @@ def full_diff(repo: str, path: str, sha: Optional[str] = None, untracked: bool =
     """Unified diff of one file with the whole file as context
 
     Working tree vs HEAD by default (staged and unstaged merged), a commit vs its first parent with
-    `sha`, the whole file as insertions when untracked.
+    `sha`, the whole file as insertions when untracked
     """
     common = ["--no-color", "--no-ext-diff", FULL_CONTEXT]
+    # untracked: against /dev/null, where exit code 1 only means the files differ
     if untracked:
         return run(repo, ["diff", "--no-index"] + common + ["--", os.devnull, path], ok_codes=(0, 1))
     if sha:
@@ -279,19 +296,19 @@ def stage(repo: str, change: FileChange) -> None:
 
 
 def commit(repo: str, message: str) -> None:
-    """Commit what is staged; the message is one argv element, so it needs no quoting of its own"""
+    """Commit what is staged; `message` goes as one argv element, unquoted"""
     run(repo, ["commit", "-m", message])
 
 
 def head_message(repo: str) -> str:
-    """HEAD's whole message, exactly as git stores it"""
+    """HEAD's full message, surrounding newlines stripped"""
     return run(repo, ["log", "-1", "--format=%B"]).strip("\n")
 
 
 def amend(repo: str, message: str, allow_empty: bool = False) -> None:
     """Rewrite HEAD with `message`, folding in whatever is staged
 
-    `allow_empty` for a pure reword: git refuses an amend carrying no change, failing on an empty commit.
+    `allow_empty` lets a reword through when HEAD itself is empty (no diff vs its parent)
     """
     run(repo, ["commit", "--amend"] + (["--allow-empty"] if allow_empty else []) + ["-m", message])
 
@@ -305,7 +322,7 @@ def unstage(repo: str, change: FileChange) -> None:
 
 
 def discard(repo: str, change: FileChange) -> None:
-    """Throw away the file's changes, staged and unstaged, restoring the HEAD version"""
+    """Throw away the file's staged and unstaged changes: restore HEAD's version, or delete a new file"""
     if change.status == "?":
         run(repo, ["clean", "-f", "--", change.path])
         return

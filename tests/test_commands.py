@@ -583,3 +583,90 @@ def test_staging_the_only_file_leaves_an_empty_listing(monkeypatch):
     monkeypatch.setattr(commands.render, "render_message", lambda view, st, text: messages.append(text))
     assert press(monkeypatch, "stage", flagged(False), "f0.py", []) == []
     assert messages == ["No uncommitted changes in /repo"]
+
+
+def all_files_view():
+    """An all-files view of a.py (two hunks) and b.py (one), rendered with the caret at the top"""
+    from vdiff import parse
+    lines_a = [parse.Line(" ", i, i, f"a{i}") for i in range(1, 30)]
+    lines_a[2] = parse.Line("+", None, 3, "new a3")
+    lines_a[25] = parse.Line("+", None, 26, "new a26")
+    lines_b = [parse.Line(" ", 1, 1, "b1"), parse.Line("-", 2, None, "old b2")]
+    view = sublime.View()
+    st = state.ViewState("/repo")
+    st.all_mode = True
+    st.files = [change("a.py"), change("b.py")]
+    st.all_diffs = {path: (lines, parse.change_blocks(lines), False)
+                    for path, lines in (("a.py", lines_a), ("b.py", lines_b))}
+    commands.render.render_all(view, st)
+    return view, st
+
+
+def heading_row(st, path):
+    return next(i for i, (c, _, section) in enumerate(st.all_rows) if section and c.path == path)
+
+
+def put_caret(view, row):
+    view.sel().clear()
+    view.sel().add(sublime.Region(commands.render.index_point(view, row)))
+
+
+def test_all_files_step_change_from_a_heading_lands_on_its_first_hunk():
+    view, st = all_files_view()
+    rows = dict(zip(st.all_change_row_targets, st.all_change_rows))
+
+    # from the top, outside any file: the very first hunk, not the second
+    commands.ACTIONS["next_change"](view, None, st)
+    assert commands.render.caret_index(view) == rows[("a.py", 0)]
+
+    # from a.py's heading: its first hunk
+    put_caret(view, heading_row(st, "a.py"))
+    commands.ACTIONS["next_change"](view, None, st)
+    assert commands.render.caret_index(view) == rows[("a.py", 0)]
+
+    # from b.py's heading back: the hunk before b.py's first, a.py's last
+    put_caret(view, heading_row(st, "b.py"))
+    commands.ACTIONS["prev_change"](view, None, st)
+    assert commands.render.caret_index(view) == rows[("a.py", 1)]
+
+    # from a hunk: the next one, across files
+    commands.ACTIONS["next_change"](view, None, st)
+    assert commands.render.caret_index(view) == rows[("b.py", 0)]
+
+
+def test_arrows_do_nothing_in_the_single_file_view():
+    view, st = at_change([(2, 4)], 2)
+    st.change = change("a.py")
+    commands.ACTIONS["collapse"](view, None, st)
+    assert st.collapsed == set() and not st.all_mode and st.all_rows == []
+
+
+def test_git_action_refresh_stays_in_the_all_files_view(monkeypatch):
+    view, st = all_files_view()
+    st.change = st.files[1]
+    monkeypatch.setattr(commands, "run_async", lambda work, done: done(work()))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [change("a.py"), change("b.py")])
+    shown = []
+    monkeypatch.setattr(commands, "show_all", lambda view, st, focus=None: shown.append(focus))
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: shown.append(("file", c.path)))
+    commands.refresh_listing(view, st, pick=None)
+    assert shown == ["b.py"] and st.change.path == "b.py"
+
+
+def test_all_files_step_file_from_nothing_and_with_no_files():
+    view, st = all_files_view()
+    commands.ACTIONS["next_file"](view, None, st)
+    assert st.change.path == "a.py"
+    st.change = None
+    put_caret(view, 0)
+    commands.ACTIONS["prev_file"](view, None, st)
+    assert st.change.path == "b.py"
+    st.files = []
+    commands.ACTIONS["next_file"](view, None, st)  # no ZeroDivisionError
+
+
+def test_all_files_context_zero_shows_only_changed_lines(monkeypatch):
+    option(monkeypatch, "all_files_context", 0)
+    view, st = all_files_view()
+    shown = [line for _, line, _ in st.all_rows if line is not None]
+    assert shown and all(line.kind != " " for line in shown)

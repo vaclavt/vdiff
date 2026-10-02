@@ -1,4 +1,4 @@
-""" Small helpers shared across vdiff modules """
+"""Small helpers shared across vdiff modules"""
 import logging
 from typing import Any, Callable, Optional
 
@@ -42,6 +42,7 @@ def run_async(work: Callable[[], Any], done: Callable[[Any], None]) -> None:
     """Run `work()` on sublime's worker thread, hand the result to `done` on the main thread"""
 
     def job() -> None:
+        """Worker-thread body: run `work`, pass on its result or report its error"""
         try:
             result = work()
         except Exception as error:

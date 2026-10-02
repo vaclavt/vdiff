@@ -1,18 +1,17 @@
-""" vDiff plugin entry point: review uncommitted changes and recent commits inside Sublime Text
+"""vDiff plugin entry point: review uncommitted changes and recent commits inside Sublime Text
 
-Sublime reloads a plugin only when this file changes, so save it after editing a submodule.
+Sublime reloads a plugin only when this file changes, so save it after editing a submodule
 """
 import logging
 import sys
 
 import sublime
 
-# sublime reloads only this file: drop the submodules so an edited one is re-imported below.
-# Open views lose in-memory state and are rebuilt from their settings by _restore_all.
+# drop the submodules so an edited one is re-imported; open views are rebuilt from settings by _restore_all
 for _name in [n for n in sys.modules if n.startswith(__package__ + ".vdiff")]:
     del sys.modules[_name]
 
-# imported for sublime's command discovery, not called here
+# command and listener classes are imported for sublime's discovery
 from .vdiff.commands import (
     VdiffActionCommand,
     VdiffCommitsCommand,
@@ -35,6 +34,7 @@ def plugin_loaded():
 
 
 def _restore_all():
+    """Rebuild every review view, in every window, that has no in-memory state yet"""
     for window in sublime.windows():
         for view in window.views():
             if state.is_review_view(view) and state.get(view) is None:

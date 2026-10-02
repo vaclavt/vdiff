@@ -1,6 +1,9 @@
 
-## New functionality
+## Bugs
+- In Commits list commit message can be too long to move changes stats too far to the right so its not visible or is partially visible only
 
+
+## New functionality
 - Add (commit) summary view - in one view just changes across all files with 5 lines before and after change?)
 
 - Add pull and push action
@@ -9,10 +12,8 @@
 
 
 ## Improvements
-
 - commit messages are oneline. What are options for multiline editing?
 - visual bell blinking time setting
 
 
 ## Code
-
