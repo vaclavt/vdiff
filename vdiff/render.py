@@ -388,12 +388,12 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
         elif line.kind == "+":
             ins_regions.append(region)
     # paint everything
-    view.add_regions(KEY_DEL, del_regions, palette.SCOPE_DEL, flags=sublime.DRAW_NO_OUTLINE)
-    view.add_regions(KEY_INS, ins_regions, palette.SCOPE_INS, flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_DEL, del_regions, palette.line_scope(view, "del"), flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_INS, ins_regions, palette.line_scope(view, "ins"), flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_HEADER, file_regions, _file_header_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_DEL_COUNT, file_del_counts, KEY_FILE_DEL_COUNT, flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_INS_COUNT, file_ins_counts, KEY_FILE_INS_COUNT, flags=sublime.DRAW_NO_OUTLINE)
-    view.add_regions(KEY_FILE_PREFIX, prefix_regions, "text.plain", flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_FILE_PREFIX, prefix_regions, palette.line_numbers_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     for scope, regions in token_groups.items():
         view.add_regions(palette.token_key(scope), regions, scope, flags=sublime.DRAW_NO_OUTLINE)
     insertions, deletions = _totals(st.files)
@@ -515,8 +515,8 @@ def _paint_regions(view: sublime.View, st: ViewState) -> None:
     # full-line tint
     starts = _row_starts(lines)
     deleted, inserted = _line_regions(lines, starts)
-    view.add_regions(KEY_DEL, deleted, palette.SCOPE_DEL, flags=sublime.DRAW_NO_OUTLINE)
-    view.add_regions(KEY_INS, inserted, palette.SCOPE_INS, flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_DEL, deleted, palette.line_scope(view, "del"), flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_INS, inserted, palette.line_scope(view, "ins"), flags=sublime.DRAW_NO_OUTLINE)
     # gutter dots
     mark_flags = sublime.DRAW_NO_FILL | sublime.DRAW_NO_OUTLINE
     del_marks = [sublime.Region(starts[i]) for i, line in enumerate(lines) if line.kind == "-"]

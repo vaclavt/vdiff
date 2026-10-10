@@ -86,13 +86,17 @@ def open_review(window: sublime.Window) -> Optional[Tuple[sublime.View, ViewStat
     st = state.get(view)
     if st is None or st.repo != repo:
         # a different repository: browsing state no longer applies
-        st = state.put(view, state.ViewState(repo))
+        all_mode = settings().get("default_view_mode") == "all_in_one"
+        st = state.put(view, state.ViewState(repo, all_mode=all_mode))
     window.focus_view(view)
     return view, st
 
 
 def show_all(view: sublime.View, st: ViewState, focus: Optional[str] = None) -> None:
-    """Load all file diffs off the UI thread and switch to the aggregate view, on `focus`'s heading if given"""
+    """Load all file diffs off the UI thread and switch to the aggregate view, on `focus`'s heading
+
+    Without `focus` the caret goes to the current file's heading, as it is when the diffs land
+    """
     st.all_mode = True
     # bump the token so earlier loads drop their results
     st.token += 1
@@ -110,7 +114,8 @@ def show_all(view: sublime.View, st: ViewState, focus: Optional[str] = None) -> 
             st.set_all_diffs(result)
             if st.change is None and files:
                 st.change = files[0]
-            render.render_all(view, st, focus=focus)
+            render.render_all(view, st, focus=focus or (st.change.path if st.change else None))
+            st.rendered_token = token
     run_async(work, done)
 
 
@@ -183,11 +188,25 @@ def commit_items(commits: Sequence[Commit]) -> List[sublime.QuickPanelItem]:
 def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, files: List[FileChange],
                      kept: Kept, on_cancel: Optional[Callable[[], None]] = None,
                      placeholder: str = "Changed files") -> None:
-    """Quick panel over `files`: highlight previews, Enter shows, Esc restores `kept` (then runs on_cancel)"""
+    """Quick panel over `files`: highlight previews, Enter shows, Esc restores `kept` (then runs on_cancel)
+
+    In the aggregate view every diff is loaded once as the panel opens, and a highlight only scrolls to its file
+    """
     # the panel opens on the shown file, the view focused behind it
     st.files = files
     selected = max(0, st.index())
     window.focus_view(view)
+
+    def show(change: FileChange) -> None:
+        """Show `change`: its own diff, or its heading in the aggregate view"""
+        if not st.all_mode:
+            show_file(view, st, change)
+            return
+        st.change = change
+        st.collapsed.discard(change.path)
+        # still loading: show_all lands on st.change when the diffs arrive
+        if st.rendered_token == st.token:
+            render.render_all(view, st, focus=change.path)
 
     def on_select(index: int) -> None:
         """Enter shows the chosen file; Esc restores `kept`, then runs on_cancel if given"""
@@ -197,15 +216,18 @@ def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, 
                 st.restore(kept)
                 on_cancel()
             elif kept.change is not None:
-                # reshow the kept file
+                # reshow the kept file in the kept mode
                 st.restore(kept)
-                show_file(view, st, kept.change)
+                if st.all_mode:
+                    show_all(view, st)
+                else:
+                    show_file(view, st, kept.change)
             # nothing was kept before: the last previewed file stays
             return
         change = files[index]
         if st.change is change and st.rendered_token == st.token:
             return  # the preview already shows it
-        show_file(view, st, change)
+        show(change)
 
     def on_highlight(index: int) -> None:
         """Schedule a debounced preview of the highlighted file"""
@@ -217,10 +239,13 @@ def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, 
         def preview() -> None:
             """Show the file unless another highlight came since"""
             if ticket == st.highlight:
-                show_file(view, st, files[index])
+                show(files[index])
 
         sublime.set_timeout(preview, PREVIEW_DELAY_MS)
 
+    if st.all_mode and files:
+        st.change = files[selected]
+        show_all(view, st)
     window.show_quick_panel(file_items(files), on_select, 0, selected, on_highlight, placeholder)
 
 

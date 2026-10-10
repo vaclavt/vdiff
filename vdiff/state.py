@@ -22,6 +22,7 @@ class Kept(NamedTuple):
     commit: Optional["CommitInfo"]
     change: Optional["FileChange"]
     files: List["FileChange"]
+    all_mode: bool
 
 
 def find_change(files: Sequence["FileChange"], path: Optional[str]) -> int:
@@ -74,7 +75,7 @@ class ViewState:
 
     def kept(self) -> Kept:
         """Snapshot of what to go back to on Esc"""
-        return Kept(self.sha, self.commit, self.change, list(self.files))
+        return Kept(self.sha, self.commit, self.change, list(self.files), self.all_mode)
 
     def enter(self, sha: Optional[str] = None, commit: Optional["CommitInfo"] = None) -> Kept:
         """Switch to browsing a commit (or the working tree); returns what to restore on Esc"""
@@ -86,7 +87,7 @@ class ViewState:
 
     def restore(self, kept: Kept) -> None:
         """Go back to a snapshot; its file becomes the requested one"""
-        self.sha, self.commit, self.change, self.files = kept
+        self.sha, self.commit, self.change, self.files, self.all_mode = kept
         self.requested = kept.change
 
     def set_all_diffs(self, diffs: Dict[str, Tuple[List["Line"], List["Block"], bool]]) -> None:

@@ -94,6 +94,64 @@ def test_enter_skips_refetch_when_preview_is_current(monkeypatch):
     assert shown == ["b.py", "a.py"]
 
 
+@pytest.mark.parametrize("mode, all_mode", [("file_by_file", False), ("all_in_one", True), (None, False)])
+def test_a_new_review_view_starts_in_the_default_view_mode(monkeypatch, mode, all_mode):
+    option(monkeypatch, "default_view_mode", mode)
+    monkeypatch.setattr(commands, "resolve_repo", lambda window: "/repo")
+    monkeypatch.setattr(commands, "find_review_view", lambda window: sublime.View())
+    _, st = commands.open_review(sublime.Window())
+    assert st.all_mode is all_mode
+
+
+def test_panel_in_all_in_one_mode_scrolls_instead_of_loading_files(monkeypatch):
+    loads, focused = [], []
+
+    def fake_show_all(view, st, focus=None):
+        # load at once: what show_all's done does once the diffs land
+        st.token += 1
+        st.rendered_token = st.token
+        loads.append(st.change.path)
+
+    monkeypatch.setattr(commands, "show_all", fake_show_all)
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: pytest.fail("loaded a single file"))
+    monkeypatch.setattr(commands.render, "render_all", lambda view, st, focus=None: focused.append(focus))
+    st = state.ViewState("/repo", all_mode=True)
+    st.change = change("kept.py")
+    st.files = [st.change]
+    files = [change("a.py"), change("b.py")]
+    st.collapsed = {"b.py"}
+    window = sublime.Window()
+    commands.show_files_panel(window, sublime.View(), st, files, st.kept())
+    _, on_select, _, on_highlight, _ = window.panel
+    assert loads == ["a.py"]
+
+    # a highlight unfolds and scrolls to its file; Enter on it needs no redraw
+    on_highlight(1)
+    assert focused == ["b.py"] and st.change.path == "b.py" and "b.py" not in st.collapsed
+    on_select(1)
+    assert focused == ["b.py"] and loads == ["a.py"]
+
+    # Esc goes back to the kept file, still in the all-in-one view
+    on_select(-1)
+    assert st.all_mode and st.change.path == "kept.py" and loads == ["a.py", "kept.py"]
+
+
+def test_esc_goes_back_to_the_kept_view_mode(monkeypatch):
+    calls = []
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: calls.append(("file", c.path)))
+    monkeypatch.setattr(commands, "show_all", lambda view, st, focus=None: calls.append(("all", st.change.path)))
+    st = state.ViewState("/repo")
+    st.change = change("kept.py")
+    st.files = [st.change]
+    kept = st.kept()
+    # the view switched to all-in-one after the snapshot; Esc still restores file-by-file
+    st.all_mode = True
+    window = sublime.Window()
+    commands.show_files_panel(window, sublime.View(), st, [change("a.py")], kept)
+    window.panel[1](-1)
+    assert calls[-1] == ("file", "kept.py") and not st.all_mode
+
+
 def test_on_cancel_goes_back_to_commit_list(monkeypatch):
     monkeypatch.setattr(commands, "show_file", lambda view, st, c: None)
     st = state.ViewState("/repo")

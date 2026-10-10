@@ -84,3 +84,66 @@ def test_a_hand_edited_override_is_never_clobbered(tmp_path):
     assert "// mine" in path.read_text()
 
 
+
+
+def colour_option(monkeypatch, name, value):
+    """Set one of the colour settings for this test"""
+    from vdiff import utils
+    monkeypatch.setitem(sublime.load_settings(utils.SETTINGS_FILE), name, value)
+
+
+def test_user_line_colours_get_rules_and_tint_the_token_layer(tmp_path, monkeypatch):
+    colour_option(monkeypatch, "deleted_line_background", "#ff000040")
+    colour_option(monkeypatch, "line_numbers_foreground", "#888888")
+    view = sublime.View()
+    palette.ensure(view)
+
+    rules = by_scope(tmp_path)
+    assert rules[palette.SCOPE_LINE_DEL] == {"scope": palette.SCOPE_LINE_DEL, "background": "#ff000040"}
+    assert palette.SCOPE_LINE_INS not in rules
+    # the token layer repaints deleted text, so it carries the same background
+    colour = view.styles["comment"]["foreground"]
+    assert rules[palette.scope_for("del", colour)]["background"] == "#ff000040"
+    # a foreground alone still gets a background, or sublime would fill the region with the foreground
+    numbers = rules[palette.SCOPE_LINE_NUMBERS]
+    assert numbers["foreground"] == "#888888" and numbers["background"]
+
+
+def test_changing_a_colour_setting_rewrites_the_override(tmp_path, monkeypatch):
+    view = sublime.View()
+    palette.ensure(view)
+    assert palette.SCOPE_LINE_INS not in by_scope(tmp_path)
+    colour_option(monkeypatch, "inserted_line_background", "#00ff0040")
+    palette.ensure(view)
+    assert by_scope(tmp_path)[palette.SCOPE_LINE_INS]["background"] == "#00ff0040"
+
+
+def test_render_uses_the_user_scopes_only_once_set_and_live(monkeypatch):
+    view = sublime.View()
+    # unset: the scheme's diff tint and the plain-text line numbers, as before
+    assert palette.line_scope(view, "del") == palette.SCOPE_DEL
+    assert palette.line_numbers_scope(view) == "text.plain"
+    colour_option(monkeypatch, "deleted_line_background", "#ff000040")
+    colour_option(monkeypatch, "line_numbers_background", "#222222")
+    # set, but the override is not loaded yet: an unknown scope would paint nothing
+    assert palette.line_scope(view, "del") == palette.SCOPE_DEL
+    view.override_loaded = True
+    assert palette.line_scope(view, "del") == palette.SCOPE_LINE_DEL
+    assert palette.line_scope(view, "ins") == palette.SCOPE_INS
+    assert palette.line_numbers_scope(view) == palette.SCOPE_LINE_NUMBERS
+
+
+def test_file_header_colours_come_from_settings(tmp_path, monkeypatch):
+    palette.ensure(sublime.View())
+    rules = by_scope(tmp_path)
+    # unset: the built-in defaults
+    assert rules[palette.SCOPE_FILE_HEADER]["background"] == palette.FILE_HEADER_BACKGROUND
+    colour_option(monkeypatch, "file_header_background", "#202040")
+    colour_option(monkeypatch, "file_header_inserted_foreground", "#00ff00")
+    palette.ensure(sublime.View())
+    rules = by_scope(tmp_path)
+    assert rules[palette.SCOPE_FILE_HEADER]["background"] == "#202040"
+    # the counts sit on the heading, so they share its background
+    assert rules[palette.SCOPE_FILE_INS_COUNT]["background"] == "#202040"
+    assert rules[palette.SCOPE_FILE_INS_COUNT]["foreground"] == "#00ff00"
+    assert rules[palette.SCOPE_FILE_DEL_COUNT]["foreground"] == palette.FILE_DEL_FOREGROUND

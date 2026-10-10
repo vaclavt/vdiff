@@ -1,4 +1,7 @@
 {
+    // how a review view first shows its files: "file_by_file" or "all_in_one"; v switches between them
+    "default_view_mode": "file_by_file",
+
     // number of commits listed by "vDiff: Recent Commits"
     "commits_count": 30,
 
@@ -13,6 +16,19 @@
 
     // number of unchanged lines shown around each change in the all-files view
     "all_files_context": 5,
+
+    // background of deleted and inserted lines, e.g. "#d6464633"; empty uses the colour scheme's diff colours
+    "deleted_line_background": "",
+    "inserted_line_background": "",
+
+    // line-number column of the all-files view, e.g. "#888888" on "#1e1e1e"; empty keeps the plain-text look
+    "line_numbers_foreground": "",
+    "line_numbers_background": "",
+
+    // file heading of the all-files view: its background and the colours of its -/+ counts
+    "file_header_background": "#0000EE",
+    "file_header_deleted_foreground": "#d64646",
+    "file_header_inserted_foreground": "#46d646",
 
     // git executable; sublime's PATH may not include a user-installed git
     "git_binary": "git",

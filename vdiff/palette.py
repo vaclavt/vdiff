@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import sublime
 
+from .utils import settings
+
 LOG = logging.getLogger("vdiff")
 
 # tints under the token layer: the scheme's own diff scopes need no restart, and the token layer repaints their text
@@ -30,7 +32,7 @@ KINDS: Tuple[str, ...] = TINT_KINDS + ("ctx",)
 KIND_TINT: Dict[str, str] = {"del": SCOPE_DEL, "ins": SCOPE_INS, "del.char": SCOPE_DEL_CHAR, "ins.char": SCOPE_INS_CHAR,
                              "ctx": SCOPE_CTX}
 
-# all-files file heading and its -/+ counts; the colours are user-requested
+# all-files file heading and its -/+ counts; their colours come from settings, these when one is empty
 SCOPE_FILE_HEADER = "vdiff.file.header"
 SCOPE_FILE_DEL_COUNT = "vdiff.file.del.count"
 SCOPE_FILE_INS_COUNT = "vdiff.file.ins.count"
@@ -38,6 +40,16 @@ FILE_HEADER_BACKGROUND = "#0000FF"
 # sublime's former markup.deleted / markup.inserted colours
 FILE_DEL_FOREGROUND = "#d64646"
 FILE_INS_FOREGROUND = "#46d646"
+
+# colours the user may set; an empty line colour keeps the colour scheme's tint or the plain-text look
+COLOUR_SETTINGS: Tuple[str, ...] = ("deleted_line_background", "inserted_line_background",
+                                    "line_numbers_foreground", "line_numbers_background",
+                                    "file_header_background", "file_header_deleted_foreground",
+                                    "file_header_inserted_foreground")
+# the scopes those colours go into: the changed-line tints and the all-files line-number column
+SCOPE_LINE_DEL = "vdiff.line.del"
+SCOPE_LINE_INS = "vdiff.line.ins"
+SCOPE_LINE_NUMBERS = "vdiff.line.numbers"
 
 # tints to provision when the active scheme defines none of its own (some third-party schemes)
 FALLBACK_TINTS: Dict[str, str] = {
@@ -84,6 +96,8 @@ _palettes: Dict[str, Dict[str, int]] = {}
 _active: Optional[str] = None
 # schemes the user has already been told need a restart
 _notified: Set[Optional[str]] = set()
+# {override file name: the user colours it was provisioned with}, so changing one re-provisions
+_provisioned_with: Dict[str, Dict[str, str]] = {}
 
 
 def reset() -> None:
@@ -91,6 +105,7 @@ def reset() -> None:
     global _active
     _palettes.clear()
     _notified.clear()
+    _provisioned_with.clear()
     _active = None
 
 
@@ -161,6 +176,26 @@ def token_keys() -> List[str]:
     return [token_key(_scope_name(kind, i)) for kind in KINDS for i in sorted(colours.values())]
 
 
+def user_colours() -> Dict[str, str]:
+    """{setting: colour} for COLOUR_SETTINGS, "" where unset"""
+    return {name: settings().get(name) or "" for name in COLOUR_SETTINGS}
+
+
+def line_scope(view: sublime.View, kind: str) -> str:
+    """Tint scope for a changed line, "del" or "ins": the user's colour once its rule is live, else the scheme's"""
+    own, setting, scheme = ((SCOPE_LINE_DEL, "deleted_line_background", SCOPE_DEL) if kind == "del" else
+                            (SCOPE_LINE_INS, "inserted_line_background", SCOPE_INS))
+    return own if settings().get(setting) and scope_background(view, own) else scheme
+
+
+def line_numbers_scope(view: sublime.View) -> str:
+    """Scope for the all-files line-number column: the user's colours once their rule is live, else plain text"""
+    if (settings().get("line_numbers_foreground") or settings().get("line_numbers_background")) \
+            and scope_background(view, SCOPE_LINE_NUMBERS):
+        return SCOPE_LINE_NUMBERS
+    return "text.plain"
+
+
 def _scope_name(kind: str, index: int) -> str:
     """Generated scope name for a background kind and palette index"""
     return f"vdiff.{kind}.c{index}"
@@ -174,8 +209,10 @@ def ensure(view: sublime.View) -> None:
     global _active
     name = override_name(view)
     _active = name
-    if not name or name in _palettes:
+    user = user_colours()
+    if not name or (name in _palettes and _provisioned_with.get(name) == user):
         return
+    _provisioned_with[name] = user
     # merge into the existing override, if any
     path = os.path.join(sublime.packages_path(), "User", name)
     try:
@@ -186,10 +223,10 @@ def ensure(view: sublime.View) -> None:
                 scheme = sublime.decode_value(f.read()) or {}
         rules = scheme.setdefault("rules", [])
         # probe the scheme, record the palette, and write only when a rule changed
-        tints = _tints(view)
+        tints = _tints(view, user)
         colours = {colour: i for i, colour in enumerate(_probe_palette(view))}
         _palettes[name] = colours
-        if not _merge_rules(rules, tints, colours, view):
+        if not _merge_rules(rules, tints, colours, view, user):
             return
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -211,10 +248,11 @@ def _probe_palette(view: sublime.View) -> List[str]:
     return seen
 
 
-def _tints(view: sublime.View) -> Dict[str, str]:
+def _tints(view: sublime.View, user: Dict[str, str]) -> Dict[str, str]:
     """{tint scope: background} for the scheme's diff colours, falling back to ours per colour pair
 
-    All or nothing per pair: taking only the half a scheme defines would put our hue next to its own
+    All or nothing per pair: taking only the half a scheme defines would put our hue next to its own.
+    A line colour the user set wins over both
     """
     tints: Dict[str, str] = {}
     for line_scope, char_scope in ((SCOPE_DEL, SCOPE_DEL_CHAR), (SCOPE_INS, SCOPE_INS_CHAR)):
@@ -222,6 +260,9 @@ def _tints(view: sublime.View) -> Dict[str, str]:
         char = scope_background(view, char_scope)
         tints[line_scope] = line if line and char else FALLBACK_TINTS[line_scope]
         tints[char_scope] = char if line and char else FALLBACK_TINTS[char_scope]
+    for scope, setting in ((SCOPE_DEL, "deleted_line_background"), (SCOPE_INS, "inserted_line_background")):
+        if user[setting]:
+            tints[scope] = user[setting]
     # a region whose background is missing, transparent or equal to the editor's is filled with its
     # foreground, so context colours carry the editor background nudged by an invisible step
     tints[SCOPE_CTX] = _nudge(_global_background(view))
@@ -246,57 +287,55 @@ def _nudge(colour: str) -> str:
     return f"{colour[:5]}{blue + 1 if blue < 128 else blue - 1:02x}{colour[7:]}"
 
 
+def _put_rule(rules: List[Dict[str, str]], present: Dict[Optional[str], Dict[str, str]], wanted: Dict[str, str]) -> bool:
+    """Add `wanted`, or make the rule with its scope equal to it; True when anything changed"""
+    rule = present.get(wanted["scope"])
+    if rule is None:
+        rules.append(wanted)
+    elif rule != wanted:
+        rule.clear()
+        rule.update(wanted)
+    else:
+        return False
+    return True
+
+
 def _merge_rules(rules: List[Dict[str, str]], tints: Dict[str, str], colours: Dict[str, int],
-                 view: sublime.View) -> bool:
+                 view: sublime.View, user: Dict[str, str]) -> bool:
     """Bring the scheme's rules up to date, in place; True when anything changed
 
     Each (kind, colour) rule carries a background and a foreground, as a background alone would flatten
     the line's colours; plain tints are added only when missing and never overwritten, so a hand-tuned one survives
     """
     present = {rule.get("scope"): rule for rule in rules}
+    # the all-files file heading and its deletion and insertion counts
+    header = user["file_header_background"] or FILE_HEADER_BACKGROUND
+    wanted = [{"scope": SCOPE_FILE_HEADER, "background": header}]
+    for scope, colour in ((SCOPE_FILE_DEL_COUNT, user["file_header_deleted_foreground"] or FILE_DEL_FOREGROUND),
+                          (SCOPE_FILE_INS_COUNT, user["file_header_inserted_foreground"] or FILE_INS_FOREGROUND)):
+        wanted.append({"scope": scope, "background": header, "foreground": colour, "font_style": "bold"})
+    # the user's line colours; an unset one keeps any old rule, which render then ignores
+    for scope, setting in ((SCOPE_LINE_DEL, "deleted_line_background"), (SCOPE_LINE_INS, "inserted_line_background")):
+        if user[setting]:
+            wanted.append({"scope": scope, "background": user[setting]})
+    if user["line_numbers_foreground"] or user["line_numbers_background"]:
+        # both halves, as a region without a background is filled with its foreground
+        wanted.append({"scope": SCOPE_LINE_NUMBERS,
+                       "foreground": user["line_numbers_foreground"] or foreground(view, "text.plain") or "#ffffff",
+                       "background": user["line_numbers_background"] or _nudge(_global_background(view))})
     changed = False
-    # the all-files file heading
-    header = present.get(SCOPE_FILE_HEADER)
-    wanted_header = {"scope": SCOPE_FILE_HEADER, "background": FILE_HEADER_BACKGROUND}
-    if header is None:
-        rules.append(wanted_header)
-        changed = True
-    elif header != wanted_header:
-        header.clear()
-        header.update(wanted_header)
-        changed = True
-    # its deletion and insertion counts
-    for scope, foreground in ((SCOPE_FILE_DEL_COUNT, FILE_DEL_FOREGROUND),
-                              (SCOPE_FILE_INS_COUNT, FILE_INS_FOREGROUND)):
-        count_rule = present.get(scope)
-        wanted_count = {"scope": scope, "background": FILE_HEADER_BACKGROUND,
-                        "foreground": foreground, "font_style": "bold"}
-        if count_rule is None:
-            rules.append(wanted_count)
-            changed = True
-        elif count_rule != wanted_count:
-            count_rule.clear()
-            count_rule.update(wanted_count)
-            changed = True
+    for rule in wanted:
+        changed = _put_rule(rules, present, rule) or changed
     # plain tints the scheme lacks; the context tint gets no rule of its own
     for scope, background in tints.items():
         if scope != SCOPE_CTX and scope not in present and not scope_background(view, scope):
             rules.append({"scope": scope, "background": background})
             changed = True
-    # one rule per (kind, colour) pair
+    # one rule per (kind, colour) pair; a palette shifted under an earlier session's rule is ours to correct
     for colour, index in colours.items():
         for kind in KINDS:
-            wanted = {"scope": _scope_name(kind, index), "background": tints[KIND_TINT[kind]],
-                      "foreground": colour}
-            rule = present.get(wanted["scope"])
-            if rule is None:
-                rules.append(wanted)
-                changed = True
-            elif rule != wanted:
-                # the palette shifted under a rule an earlier session wrote; ours to keep correct
-                rule.clear()
-                rule.update(wanted)
-                changed = True
+            pair = {"scope": _scope_name(kind, index), "background": tints[KIND_TINT[kind]], "foreground": colour}
+            changed = _put_rule(rules, present, pair) or changed
     return changed
 
 
