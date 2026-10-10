@@ -1,4 +1,5 @@
 """Git access via subprocess; results are plain tuples, no sublime imports (testable)"""
+import functools
 import os
 import re
 import subprocess
@@ -113,6 +114,18 @@ def has_head(repo: str) -> bool:
         return True
     except GitError:
         return False
+
+
+@functools.lru_cache(maxsize=None)
+def index_path(repo: str) -> Optional[str]:
+    """Absolute path of the repository's index file, None outside a repository
+
+    A worktree or submodule keeps it outside <repo>/.git, which there is a file, not a directory
+    """
+    try:
+        return os.path.join(repo, run(repo, ["rev-parse", "--git-path", "index"]).strip())
+    except (GitError, OSError):
+        return None
 
 
 def base_ref(repo: str) -> str:

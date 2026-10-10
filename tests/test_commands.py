@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import sublime  # the stub, via conftest
@@ -597,6 +599,45 @@ def test_stage_all_and_unstage_all_need_something_to_do(monkeypatch):
     st.enter("abc", git.CommitInfo("abc", "abc1234", "Ann", "2026-09-23 10:00", "Fix things", ""))
     commands.ACTIONS["stage_all"](view, window, st)
     assert messages[-1] == "stage all works on uncommitted changes only"
+
+
+def watched(monkeypatch, tmp_path, all_mode):
+    """A working-tree view of a.py and b.py on disk with its fingerprint taken; returns (st, refreshes)"""
+    for name in ("a.py", "b.py", "index"):
+        (tmp_path / name).write_text(name)
+    monkeypatch.setattr(commands.git, "index_path", lambda repo: str(tmp_path / "index"))
+    refreshes = []
+    monkeypatch.setattr(commands, "refresh_listing", lambda view, st: refreshes.append(st))
+    st = state.ViewState(str(tmp_path))
+    st.files = [change("a.py"), change("b.py")]
+    st.change, st.all_mode = st.files[0], all_mode
+    st.fingerprint = commands.render.fingerprint(st)
+    return st, refreshes
+
+
+def touch(path):
+    """Push the file's mtime forward, as an edit would"""
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime + 5))
+
+
+def test_refresh_if_changed_watches_every_file_of_the_all_files_view(monkeypatch, tmp_path):
+    st, refreshes = watched(monkeypatch, tmp_path, all_mode=True)
+    commands.refresh_if_changed(sublime.View(), st)
+    assert refreshes == []
+    touch(tmp_path / "b.py")  # not the file under the caret
+    commands.refresh_if_changed(sublime.View(), st)
+    assert refreshes == [st]
+
+
+def test_refresh_if_changed_watches_the_shown_file_and_the_index(monkeypatch, tmp_path):
+    st, refreshes = watched(monkeypatch, tmp_path, all_mode=False)
+    touch(tmp_path / "b.py")  # another file: the single-file view does not show it
+    commands.refresh_if_changed(sublime.View(), st)
+    assert refreshes == []
+    touch(tmp_path / "index")
+    commands.refresh_if_changed(sublime.View(), st)
+    assert refreshes == [st]
 
 
 def test_staging_the_only_file_leaves_an_empty_listing(monkeypatch):

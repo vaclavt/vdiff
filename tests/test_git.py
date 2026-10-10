@@ -97,6 +97,16 @@ def test_stage_all_unstage_all(repo):
     assert changes["sub/n.py"].status == "?"
 
 
+def test_index_path_finds_a_worktrees_index(repo, tmp_path_factory):
+    assert git.index_path(repo) == os.path.join(repo, ".git", "index")
+    # a worktree's .git is a file pointing into the main repository
+    tree = str(tmp_path_factory.mktemp("tree") / "wt")
+    sh(repo, "worktree", "add", "-q", tree)
+    index = git.index_path(tree)
+    assert os.path.isfile(os.path.join(tree, ".git")) and os.path.isfile(index)
+    assert os.path.realpath(index).startswith(os.path.realpath(os.path.join(repo, ".git", "worktrees")))
+
+
 def test_commits(repo):
     write(repo, "a.py", "def f():\n    return 10\n\n\ndef g():\n    return 2\n")
     write(repo, "c.py", "c\n")

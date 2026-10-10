@@ -8,7 +8,7 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 import sublime
 import sublime_plugin
 
-from . import palette, parse
+from . import git, palette, parse
 from .git import FileChange, STATUS_NAMES
 from .parse import Block, Line
 from .state import VIEW_FLAG, ViewState
@@ -215,11 +215,13 @@ def caret_index(view: sublime.View) -> int:
     return view.rowcol(view.sel()[0].begin())[0] - _HEADER_ROWS
 
 
-def fingerprint(st: ViewState) -> Optional[Tuple[Optional[float], Optional[float]]]:
-    """Cheap "did anything change" key for working-tree mode: mtimes of the file and of the git index"""
+def fingerprint(st: ViewState) -> Optional[Tuple[Optional[float], ...]]:
+    """Cheap "did anything change" key for working-tree mode: mtimes of the shown files and of the git index"""
     if st.in_commit or st.change is None:
         return None
-    return (_mtime(os.path.join(st.repo, st.change.path)), _mtime(os.path.join(st.repo, ".git", "index")))
+    files = st.files if st.all_mode else [st.change]
+    index = git.index_path(st.repo)
+    return tuple(_mtime(os.path.join(st.repo, c.path)) for c in files) + (_mtime(index) if index else None,)
 
 
 def _mtime(path: str) -> Optional[float]:

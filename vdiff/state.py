@@ -48,12 +48,9 @@ class ViewState:
     token: int = 0  # bumped per show request; a stale async result is dropped
     rendered_token: int = -1  # token of the request that produced the current render
     highlight: int = 0  # bumped per quick-panel highlight, to debounce previews
-    # (file mtime, index mtime) at render time, working-tree mode; either mtime is None when unreadable
-    fingerprint: Optional[Tuple[Optional[float], Optional[float]]] = None
-    # all-files view: diffs cached so collapse/expand is instant
+    fingerprint: Optional[Tuple[Optional[float], ...]] = None  # all-files view: diffs cached so collapse/expand is instant
     all_mode: bool = False
     all_diffs: Dict[str, Tuple[List["Line"], List["Block"], bool]] = field(default_factory=dict)
-    # path -> {(old_no, new_no): [(start, end, colour)]}: syntax colours per row, offsets within the line
     all_colours: Dict[str, Dict[Tuple[Optional[int], Optional[int]], List[Tuple[int, int, str]]]] = field(default_factory=dict)
     collapsed: set = field(default_factory=set)
     all_rows: List[Tuple[Optional["FileChange"], Optional["Line"], bool]] = field(default_factory=list)
@@ -94,8 +91,11 @@ class ViewState:
 
     def set_all_diffs(self, diffs: Dict[str, Tuple[List["Line"], List["Block"], bool]]) -> None:
         """Replace the all-files diffs; a file's cached colours survive only if its diff is unchanged"""
-        self.all_colours = {path: colours for path, colours in self.all_colours.items()
-                            if path in diffs and path in self.all_diffs and diffs[path][0] == self.all_diffs[path][0]}
+        self.all_colours = {
+            path: colours
+            for path, colours in self.all_colours.items()
+            if path in diffs and path in self.all_diffs and diffs[path][0] == self.all_diffs[path][0]
+        }
         self.all_diffs = diffs
 
     def persist(self, view: "sublime.View") -> None:
