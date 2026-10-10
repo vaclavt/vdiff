@@ -402,6 +402,27 @@ def _git_action(verb: str, done_verb: str, operation: Callable[[str, FileChange]
     return act
 
 
+def _bulk_action(verb: str, done_verb: str, operation: Callable[[str], None],
+                 wanted: Callable[[FileChange], bool]) -> Action:
+    """Action running `operation(repo)` ("<verb> all") when some listed file is `wanted`, then re-listing on the same file"""
+
+    def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
+        """Run the operation off the UI thread, then refresh the listing"""
+        if st.in_commit:
+            status(f"{verb} all works on uncommitted changes only")
+            return
+        count = sum(1 for c in st.files if wanted(c))
+        if not count:
+            status(f"nothing to {verb}")
+            return
+        run_async(
+            lambda: operation(st.repo),
+            lambda _: refresh_listing(view, st, f"{done_verb} {file_count(count)}"),
+        )
+
+    return act
+
+
 def _confirm_discard(change: FileChange) -> bool:
     """Ask before discarding or deleting, unless the confirm_discard setting is off"""
     if not settings().get("confirm_discard", True):
@@ -678,6 +699,8 @@ ACTIONS: Dict[str, Action] = {
     "help": _act_help,
     "stage": _git_action("stage", "staged", git.stage, pick=_stage_next),
     "unstage": _git_action("unstage", "unstaged", git.unstage),
+    "stage_all": _bulk_action("stage", "staged", git.stage_all, lambda c: not c.staged),
+    "unstage_all": _bulk_action("unstage", "unstaged", git.unstage_all, lambda c: c.staged),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),
     "commit": _act_commit,
     "amend": _act_amend,

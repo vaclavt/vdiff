@@ -578,6 +578,27 @@ def test_unstage_and_discard_do_not_move(monkeypatch):
     assert press(monkeypatch, "discard", files, "f1.py", flagged(True, False, False)) == ["f1.py"]
 
 
+def test_stage_all_and_unstage_all_stay_on_the_file(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands, "status", messages.append)
+    assert press(monkeypatch, "stage_all", flagged(True, False, False), "f1.py", flagged(True, True, True)) == ["f1.py"]
+    assert messages[0] == "staged 2 files"
+    assert press(monkeypatch, "unstage_all", flagged(True, False, True), "f1.py", flagged(False, False, False)) == ["f1.py"]
+    assert messages[-1] == "unstaged 2 files"
+
+
+def test_stage_all_and_unstage_all_need_something_to_do(monkeypatch):
+    messages = []
+    monkeypatch.setattr(commands, "status", messages.append)
+    assert press(monkeypatch, "stage_all", flagged(True, True), "f0.py", []) == []
+    assert press(monkeypatch, "unstage_all", flagged(False, False), "f0.py", []) == []
+    assert messages == ["nothing to stage", "nothing to unstage"]
+    view, window, st = at_file(flagged(False), "f0.py")
+    st.enter("abc", git.CommitInfo("abc", "abc1234", "Ann", "2026-09-23 10:00", "Fix things", ""))
+    commands.ACTIONS["stage_all"](view, window, st)
+    assert messages[-1] == "stage all works on uncommitted changes only"
+
+
 def test_staging_the_only_file_leaves_an_empty_listing(monkeypatch):
     messages = []
     monkeypatch.setattr(commands.render, "render_message", lambda view, st, text: messages.append(text))

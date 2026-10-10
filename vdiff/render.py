@@ -91,8 +91,8 @@ KEY_GROUPS: List[Tuple[str, bool, List[Key]]] = [
         "Actions",
         False,
         [
-            Key("s", "stage", "stage", ("stage",)),
-            Key("u", "unstage", "unstage", ("unstage",)),
+            Key("s / S", "stage / stage all", "stage", ("stage", "stage_all")),
+            Key("u / U", "unstage / unstage all", "unstage", ("unstage", "unstage_all")),
             Key("d", "discard", "discard", ("discard",)),
             Key("C", "commit the staged files", "commit", ("commit",)),
             Key("m", "amend the last commit", "amend", ("amend",)),
@@ -138,7 +138,7 @@ a { text-decoration: none; padding: 0.15rem 0.5rem; margin-left: 0.3rem; border-
 """
 
 # minihtml drops the rest of a stylesheet at a selector it cannot parse, so each rule uses one bare element or class
-# .group's top margin replaces body's top padding; .kdim inherits its colour from .dim
+# .group's top margin replaces body's top padding
 HELP_CSS = """
 body { margin: 0; padding: 0 0.8rem 0.6rem 0.8rem; }
 .group { margin-top: 0.6rem; color: var(--bluish); font-weight: bold; }
@@ -146,7 +146,6 @@ body { margin: 0; padding: 0 0.8rem 0.6rem 0.8rem; }
 .row { color: color(var(--foreground) alpha(0.85)); }
 .dim { color: color(var(--foreground) alpha(0.35)); }
 .k { color: var(--orangish); font-weight: bold; }
-.kdim { font-weight: bold; }
 a { text-decoration: none; color: color(var(--foreground) alpha(0.85)); }
 """
 
@@ -795,14 +794,12 @@ def help_html(st: ViewState) -> str:
         if dim:
             heading += ' <span class="note">uncommitted only</span>'
         parts.append(f'<div class="group">{heading}</div>')
-        # one class per element: a compound selector would silently drop the rest of HELP_CSS
-        row_class, key_class = ("dim", "kdim") if dim else ("row", "k")
+        # keys stay orange in a dimmed group; only the text dims
+        row_class = "dim" if dim else "row"
         # a row per key with a padded key column; a single-action row becomes a link
         for key in group:
-            row = (
-                f'<span class="{key_class}">{html.escape(key.keys)}</span>'
-                f'{"&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2)}{html.escape(key.label)}'
-            )
+            pad = "&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2)
+            row = f'<span class="k">{html.escape(key.keys)}</span>{pad}{html.escape(key.label)}'
             if len(key.actions) == 1 and not dim:
                 row = f'<a href="{key.actions[0]}">{row}</a>'
             parts.append(f'<div class="{row_class}">{row}</div>')

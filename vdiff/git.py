@@ -295,6 +295,11 @@ def stage(repo: str, change: FileChange) -> None:
     run(repo, ["add", "-A", "--", change.path])
 
 
+def stage_all(repo: str) -> None:
+    """Stage every change in the working tree, including deletions and untracked files"""
+    run(repo, ["add", "-A"])
+
+
 def commit(repo: str, message: str) -> None:
     """Commit what is staged; `message` goes as one argv element, unquoted"""
     run(repo, ["commit", "-m", message])
@@ -313,12 +318,22 @@ def amend(repo: str, message: str, allow_empty: bool = False) -> None:
     run(repo, ["commit", "--amend"] + (["--allow-empty"] if allow_empty else []) + ["-m", message])
 
 
+def _unstage_path(repo: str, path: str) -> None:
+    """Move the staged changes under `path` back to the working tree; before the first commit, drop them from the index"""
+    if has_head(repo):
+        run(repo, ["reset", "-q", "--", path])
+    else:
+        run(repo, ["rm", "-r", "-q", "--cached", "--", path])
+
+
 def unstage(repo: str, change: FileChange) -> None:
     """Move the file's staged changes back to the working tree"""
-    if has_head(repo):
-        run(repo, ["reset", "-q", "--", change.path])
-    else:
-        run(repo, ["rm", "-r", "-q", "--cached", "--", change.path])
+    _unstage_path(repo, change.path)
+
+
+def unstage_all(repo: str) -> None:
+    """Move every staged change back to the working tree"""
+    _unstage_path(repo, ".")
 
 
 def discard(repo: str, change: FileChange) -> None:

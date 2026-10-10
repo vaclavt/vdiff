@@ -52,6 +52,7 @@ Use one method or the other, not both: an unpacked `Packages/vDiff` directory ov
 |---|---|
 | `f` / `c` | changed files / recent commits panel |
 | `s` / `u` / `d` | stage / unstage / discard the file (uncommitted mode); `s` then moves on to the next unstaged file |
+| `S` / `U` | stage all unstaged files / unstage all staged files |
 | `C` | commit the staged files, typing the message in an input panel |
 | `m` | amend the last commit: edit its subject, keep its body, fold in anything staged |
 | `o` or Enter | open the real file at this line |

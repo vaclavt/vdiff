@@ -154,14 +154,14 @@ def test_help_popup_lists_every_key():
     assert view.is_popup_visible()
     for group in ("Navigate", "Actions", "View"):
         assert f">{group}<" in html
-    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s", "u", "d", "C", "m", "r", "z", "esc"):
+    for keys in ("] [", "n p", "o ⏎", "j k", "f", "c", "s / S", "u / U", "d", "C", "m", "r", "z", "esc"):
         assert f">{keys}<" in html
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
     assert 'class="dim"' not in html and "uncommitted only" not in html
-    assert 'href="stage"' in html and 'href="files"' in html and 'href="close"' in html
+    assert 'href="discard"' in html and 'href="files"' in html and 'href="close"' in html
     # rows covering two actions stay plain text
-    assert 'href="next_change"' not in html
+    assert 'href="next_change"' not in html and 'href="stage"' not in html
     # the popup does not list the key that opens it
     assert ">?<" not in html
 
@@ -173,6 +173,8 @@ def test_help_popup_dims_file_actions_in_commit_mode():
 
     assert "uncommitted only" in html
     assert html.count('class="dim"') == 5
+    # dimmed rows keep their keys orange
+    assert 'class="kdim"' not in html and '<span class="k">C</span>' in html
     assert 'href="stage"' not in html and 'href="unstage"' not in html and 'href="discard"' not in html
     assert 'href="commit"' not in html and 'href="amend"' not in html
     # everything that still applies stays clickable
@@ -215,7 +217,7 @@ def test_keymap_matches_help_table():
 
     # rebinding a key without updating the table would leave the popup and status bar lying
     bound_keys = {DISPLAY_KEYS.get(key, key) for b in bindings for key in b["keys"]}
-    assert bound_keys == {token for k in render.KEYS for token in k.keys.split()} | {"?"}
+    assert bound_keys == {token for k in render.KEYS for token in k.keys.split() if token != "/"} | {"?"}
 
 
 def test_no_binding_yields_to_vintage_command_mode():

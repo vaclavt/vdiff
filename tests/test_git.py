@@ -84,6 +84,19 @@ def test_stage_unstage_discard(repo):
     assert git.changed_files(repo) == []
 
 
+def test_stage_all_unstage_all(repo):
+    write(repo, "a.py", "changed\n")
+    os.remove(os.path.join(repo, "gone.py"))
+    write(repo, "sub/n.py", "new\n")
+    git.stage_all(repo)
+    changes = {c.path: c for c in git.changed_files(repo)}
+    assert set(changes) == {"a.py", "gone.py", "sub/n.py"} and all(c.staged for c in changes.values())
+    git.unstage_all(repo)
+    changes = {c.path: c for c in git.changed_files(repo)}
+    assert set(changes) == {"a.py", "gone.py", "sub/n.py"} and not any(c.staged for c in changes.values())
+    assert changes["sub/n.py"].status == "?"
+
+
 def test_commits(repo):
     write(repo, "a.py", "def f():\n    return 10\n\n\ndef g():\n    return 2\n")
     write(repo, "c.py", "c\n")
@@ -153,6 +166,10 @@ def test_no_head_repo(tmp_path):
     diff = parse.parse_unified(git.full_diff(repo, "x.py"))
     assert [l.kind for l in diff.lines] == ["+"]
     git.unstage(repo, changes[0])
+    assert git.changed_files(repo)[0].status == "?"
+    git.stage_all(repo)
+    assert git.changed_files(repo)[0].staged
+    git.unstage_all(repo)
     assert git.changed_files(repo)[0].status == "?"
 
 
