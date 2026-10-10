@@ -32,11 +32,13 @@ KINDS: Tuple[str, ...] = TINT_KINDS + ("ctx",)
 KIND_TINT: Dict[str, str] = {"del": SCOPE_DEL, "ins": SCOPE_INS, "del.char": SCOPE_DEL_CHAR, "ins.char": SCOPE_INS_CHAR,
                              "ctx": SCOPE_CTX}
 
-# all-files file heading and its -/+ counts; their colours come from settings, these when one is empty
+# all-files file heading, its status letter and its -/+ counts; their colours come from settings, these when one is empty
 SCOPE_FILE_HEADER = "vdiff.file.header"
 SCOPE_FILE_DEL_COUNT = "vdiff.file.del.count"
 SCOPE_FILE_INS_COUNT = "vdiff.file.ins.count"
+SCOPE_FILE_STATUS = "vdiff.file.status"
 FILE_HEADER_BACKGROUND = "#0000FF"
+FILE_STATUS_FOREGROUND = "#ffffff"
 # sublime's former markup.deleted / markup.inserted colours
 FILE_DEL_FOREGROUND = "#d64646"
 FILE_INS_FOREGROUND = "#46d646"
@@ -45,7 +47,7 @@ FILE_INS_FOREGROUND = "#46d646"
 COLOUR_SETTINGS: Tuple[str, ...] = ("deleted_line_background", "inserted_line_background",
                                     "line_numbers_foreground", "line_numbers_background",
                                     "file_header_background", "file_header_deleted_foreground",
-                                    "file_header_inserted_foreground")
+                                    "file_header_inserted_foreground", "file_header_status_foreground")
 # the scopes those colours go into: the changed-line tints and the all-files line-number column
 SCOPE_LINE_DEL = "vdiff.line.del"
 SCOPE_LINE_INS = "vdiff.line.ins"
@@ -311,7 +313,8 @@ def _merge_rules(rules: List[Dict[str, str]], tints: Dict[str, str], colours: Di
     # the all-files file heading and its deletion and insertion counts
     header = user["file_header_background"] or FILE_HEADER_BACKGROUND
     wanted = [{"scope": SCOPE_FILE_HEADER, "background": header}]
-    for scope, colour in ((SCOPE_FILE_DEL_COUNT, user["file_header_deleted_foreground"] or FILE_DEL_FOREGROUND),
+    for scope, colour in ((SCOPE_FILE_STATUS, user["file_header_status_foreground"] or FILE_STATUS_FOREGROUND),
+                          (SCOPE_FILE_DEL_COUNT, user["file_header_deleted_foreground"] or FILE_DEL_FOREGROUND),
                           (SCOPE_FILE_INS_COUNT, user["file_header_inserted_foreground"] or FILE_INS_FOREGROUND)):
         wanted.append({"scope": scope, "background": header, "foreground": colour, "font_style": "bold"})
     # the user's line colours; an unset one keeps any old rule, which render then ignores

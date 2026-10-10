@@ -147,3 +147,13 @@ def test_file_header_colours_come_from_settings(tmp_path, monkeypatch):
     assert rules[palette.SCOPE_FILE_INS_COUNT]["background"] == "#202040"
     assert rules[palette.SCOPE_FILE_INS_COUNT]["foreground"] == "#00ff00"
     assert rules[palette.SCOPE_FILE_DEL_COUNT]["foreground"] == palette.FILE_DEL_FOREGROUND
+
+
+def test_the_status_letter_is_white_on_the_heading_unless_set(tmp_path, monkeypatch):
+    palette.ensure(sublime.View())
+    rule = by_scope(tmp_path)[palette.SCOPE_FILE_STATUS]
+    assert rule["foreground"] == palette.FILE_STATUS_FOREGROUND == "#ffffff"
+    assert rule["background"] == by_scope(tmp_path)[palette.SCOPE_FILE_HEADER]["background"]
+    colour_option(monkeypatch, "file_header_status_foreground", "#ffff00")
+    palette.ensure(sublime.View())
+    assert by_scope(tmp_path)[palette.SCOPE_FILE_STATUS]["foreground"] == "#ffff00"

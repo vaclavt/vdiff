@@ -722,6 +722,24 @@ def all_files_view():
     return view, st
 
 
+def test_all_files_headings_show_the_status_letter_before_the_counts():
+    from vdiff import parse
+    view = sublime.View()
+    st = state.ViewState("/repo")
+    st.all_mode = True
+    st.files = [git.FileChange("a - b.py", "M", True, 1, 0, None), change("m.py"), change("gone.py", "D")]
+    lines = [parse.Line("+", None, 1, "x")]
+    st.all_diffs = {c.path: (lines, parse.change_blocks(lines), False) for c in st.files}
+    commands.render.render_all(view, st)
+
+    headings = [row for row in view.text.split("\n") if row.startswith("▼")]
+    # staged wins over the git letter; a path containing " -" must not confuse the letter's position
+    assert headings == ["▼ a - b.py  s -0 +1", "▼ m.py  m -0 +1", "▼ gone.py  d -0 +1"]
+    regions, scope, _, _ = view.regions[commands.render.KEY_FILE_STATUS]
+    assert scope == commands.render.palette.SCOPE_FILE_STATUS
+    assert [view.text[r.a:r.b] for r in regions] == ["s", "m", "d"]
+
+
 def heading_row(st, path):
     return next(i for i, (c, _, section) in enumerate(st.all_rows) if section and c.path == path)
 

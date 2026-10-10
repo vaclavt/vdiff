@@ -25,8 +25,9 @@
     "line_numbers_foreground": "",
     "line_numbers_background": "",
 
-    // file heading of the all-files view: its background and the colours of its -/+ counts
+    // file heading of the all-files view: its background and the colours of its status letter and -/+ counts
     "file_header_background": "#0000EE",
+    "file_header_status_foreground": "#ffffff",
     "file_header_deleted_foreground": "#d64646",
     "file_header_inserted_foreground": "#46d646",
 

@@ -25,6 +25,7 @@ KEY_INS_CHAR = "vdiff.ins.char"
 KEY_FILE_HEADER = "vdiff.file.header"
 KEY_FILE_DEL_COUNT = palette.SCOPE_FILE_DEL_COUNT
 KEY_FILE_INS_COUNT = palette.SCOPE_FILE_INS_COUNT
+KEY_FILE_STATUS = palette.SCOPE_FILE_STATUS
 KEY_FILE_PREFIX = "vdiff.file.prefix"
 REGION_KEYS = (
     KEY_DEL,
@@ -36,6 +37,7 @@ REGION_KEYS = (
     KEY_FILE_HEADER,
     KEY_FILE_DEL_COUNT,
     KEY_FILE_INS_COUNT,
+    KEY_FILE_STATUS,
     KEY_FILE_PREFIX,
 )
 
@@ -318,12 +320,13 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
                 st.all_change_targets.append((change.path, hunk_index))
                 hunk_index += 1
             in_change = changed
-        # the heading: fold marker, path and the file's -/+ counts
+        # the heading: fold marker, path, lowercase status letter (s when anything is staged) and the file's -/+ counts
         ins, dele = parse.counts(lines)
         marker = "▶" if change.path in st.collapsed else "▼"
         if change.path == focus:
             heading = len(rows)
-        rows.append(f"{marker} {change.path}  -{dele} +{ins}")
+        letter = "s" if change.staged else change.status.lower()
+        rows.append(f"{marker} {change.path}  {letter} -{dele} +{ins}")
         metadata.append((change, None, True))
         # the diff rows, recording the row where each visible change starts
         if change.path not in st.collapsed:
@@ -351,7 +354,7 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
     # per-row regions: heading counts, number prefix, tint, token colours
     starts = _row_starts_for_text(rows)
     del_regions, ins_regions, file_regions, prefix_regions = [], [], [], []
-    file_del_counts, file_ins_counts = [], []
+    file_del_counts, file_ins_counts, file_statuses = [], [], []
     token_groups: Dict[str, List[sublime.Region]] = {}
     default_colour = palette.foreground(view, "text.plain")
     resolved = palette.tokens_resolved(view)
@@ -360,9 +363,12 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
     for i, (change, line, section) in enumerate(metadata):
         if section:
             file_regions.append(sublime.Region(starts[i], starts[i] + len(rows[i])))
-            # colour just the counts over the heading tint; rfind, as a path may contain " -"
+            # colour just the status letter and counts over the heading tint; rfind, as a path may contain " -"
             minus = rows[i].rfind(" -") + 1
             plus = rows[i].rfind(" +") + 1
+            if minus >= 2:
+                # the letter sits just before the space before the deletion count
+                file_statuses.append(sublime.Region(starts[i] + minus - 2, starts[i] + minus - 1))
             if minus and plus > minus:
                 file_del_counts.append(sublime.Region(starts[i] + minus, starts[i] + plus - 1))
             if plus:
@@ -393,6 +399,7 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
     view.add_regions(KEY_FILE_HEADER, file_regions, _file_header_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_DEL_COUNT, file_del_counts, KEY_FILE_DEL_COUNT, flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_INS_COUNT, file_ins_counts, KEY_FILE_INS_COUNT, flags=sublime.DRAW_NO_OUTLINE)
+    view.add_regions(KEY_FILE_STATUS, file_statuses, KEY_FILE_STATUS, flags=sublime.DRAW_NO_OUTLINE)
     view.add_regions(KEY_FILE_PREFIX, prefix_regions, palette.line_numbers_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     for scope, regions in token_groups.items():
         view.add_regions(palette.token_key(scope), regions, scope, flags=sublime.DRAW_NO_OUTLINE)

@@ -66,7 +66,7 @@ Use one method or the other, not both: an unpacked `Packages/vDiff` directory ov
 | `?` | show this key list in a popup |
 | Esc | close the view |
 
-The header links do the same with the mouse. The all-files view shows five context lines around each change by default; configure this with `all_files_context` in `vDiff.sublime-settings`. The same file sets the background of deleted and inserted lines (`deleted_line_background`, `inserted_line_background`) and the colours of the all-files line-number column (`line_numbers_foreground`, `line_numbers_background`); left empty, they follow the colour scheme. The all-files file heading takes its colours from `file_header_background`, `file_header_deleted_foreground` and `file_header_inserted_foreground`.
+The header links do the same with the mouse. The all-files view shows five context lines around each change by default; configure this with `all_files_context` in `vDiff.sublime-settings`. The same file sets the background of deleted and inserted lines (`deleted_line_background`, `inserted_line_background`) and the colours of the all-files line-number column (`line_numbers_foreground`, `line_numbers_background`); left empty, they follow the colour scheme. Each all-files file heading shows the file's status letter (`s` when anything is staged, else `m`, `d`, `a`, `?` ...) before its -/+ counts, and takes its colours from `file_header_background`, `file_header_status_foreground`, `file_header_deleted_foreground` and `file_header_inserted_foreground`.
 
 ## The channel
 
