@@ -8,6 +8,8 @@ from . import git
 
 SETTINGS_FILE = "vDiff.sublime-settings"
 
+DEBOUNCE_MS = 60
+
 LOG = logging.getLogger("vdiff")
 
 _settings: Optional[sublime.Settings] = None
@@ -28,9 +30,15 @@ def apply_git_binary() -> None:
     git.GIT_BINARY = settings().get("git_binary") or "git"
 
 
-def file_count(count: int) -> str:
-    """'1 file' / '3 files' for a message"""
-    return f'{count} {"file" if count == 1 else "files"}'
+def commits_count() -> int:
+    """How many commits the commits panel and the branches view list"""
+    return int(settings().get("commits_count", 30) or 30)
+
+
+def file_count(count: int, qualifier: str = "") -> str:
+    """'1 file' / '3 files' for a message; a qualifier goes before the noun ('1 staged file')"""
+    noun = "file" if count == 1 else "files"
+    return f"{count} {qualifier} {noun}" if qualifier else f"{count} {noun}"
 
 
 def status(message: str) -> None:

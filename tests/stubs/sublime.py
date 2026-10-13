@@ -70,6 +70,16 @@ def status_message(text):
     pass
 
 
+# what ok_cancel_dialog answers; a test flips it to model Cancel
+dialog_answer = True
+dialogs = []
+
+
+def ok_cancel_dialog(message, ok_title="", title=""):
+    dialogs.append((message, ok_title))
+    return dialog_answer
+
+
 def packages_path():
     return "/tmp/Packages"
 
@@ -146,6 +156,7 @@ class View:
         self.regions = {}
         self.syntax = None
         self.read_only = True
+        self.changes = 0
         self.name_ = ""
         self.sel_ = []
         self.status = {}
@@ -168,6 +179,10 @@ class View:
 
     def replace(self, edit, region, text):
         self.text = self.text[: region.begin()] + text + self.text[region.end() :]
+        self.changes += 1
+
+    def change_count(self):
+        return self.changes
 
     def run_command(self, name, args=None):
         if name == "vdiff_replace":
@@ -251,6 +266,19 @@ class View:
 
     def em_width(self):
         return 8.0
+
+    def style(self):
+        # the scheme's globals; no background here, so palette falls back as it did before this was stubbed
+        return {"line_highlight": "#3b4350"}
+
+    def line(self, point):
+        region = self.full_line(point)
+        end = region.b - 1 if self.text[region.b - 1:region.b] == "\n" else region.b
+        return Region(region.a, end)
+
+    def viewport_extent(self):
+        # 100 columns at the stub's em width
+        return (800.0, 600.0)
 
     def extract_tokens_with_scopes(self, region):
         """One token per run of word characters and one per run of anything else, scoped by its shape

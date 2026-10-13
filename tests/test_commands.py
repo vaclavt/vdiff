@@ -4,6 +4,7 @@ import pytest
 
 import sublime  # the stub, via conftest
 
+from conftest import put_caret  # noqa: E402
 from vdiff import commands, git, state, utils
 
 
@@ -161,6 +162,58 @@ def test_on_cancel_goes_back_to_commit_list(monkeypatch):
     commands.show_files_panel(window, sublime.View(), st, [change("a.py")], kept, on_cancel=lambda: back.append(1))
     window.panel[1](-1)
     assert back == [1] and st.sha is None
+
+
+def test_esc_from_the_reopened_commit_list_returns_to_the_branches_view(monkeypatch):
+    loads = []
+    monkeypatch.setattr(commands.branches, "load", lambda view, st, keep_caret=False: loads.append(st.mode))
+    window = sublime.Window()
+    view = sublime.View()
+    st = state.ViewState("/repo")
+    st.mode = state.MODE_BRANCHES
+    commit = git.Commit("a" * 40, "a" * 7, "me", "today", "subject", 1, 1, 0)
+    # Esc on the list opened straight over the branches view: nothing to put back
+    st.drawn, st.rendered_token = st.describe(), st.token
+    commands.VdiffCommitsCommand(window).show_commits(view, st, [commit], 0)
+    window.panel[1](-1)
+    assert loads == []
+    # reopened after a commit's files were cancelled: the state says branches, the screen still shows the commit
+    st.drawn = (state.MODE_DIFF, "a" * 40, False, "x.py")
+    commands.VdiffCommitsCommand(window).show_commits(view, st, [commit], 0)
+    window.panel[1](-1)
+    assert loads == [state.MODE_BRANCHES]
+    # the same holds for a diff the list was reopened over: the kept working-tree file is shown again
+    shown = []
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: shown.append(c.path))
+    st.mode, st.change = state.MODE_DIFF, change("kept.py")
+    commands.VdiffCommitsCommand(window).show_commits(view, st, [commit], 0)
+    window.panel[1](-1)
+    assert shown == ["kept.py"]
+
+
+def test_files_on_a_clean_tree_leave_the_branches_view_in_place(monkeypatch):
+    view, st = sublime.View(), state.ViewState("/repo")
+    messages, notices = [], []
+    monkeypatch.setattr(commands, "open_review", lambda window: (view, st))
+    monkeypatch.setattr(commands, "status", messages.append)
+    monkeypatch.setattr(commands.render, "render_message", lambda view, st, text: notices.append(text))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [])
+    window = sublime.Window()
+    st.mode = state.MODE_BRANCHES
+    commands.VdiffFilesCommand(window).run()
+    assert messages == ["no uncommitted changes"] and notices == [] and st.in_branches and window.panel is None
+    # with changes the panel comes up as usual; in a diff view the notice is shown
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [change("a.py")])
+    commands.VdiffFilesCommand(window).run()
+    assert window.panel is not None
+    # nor does a commit under review give way to it
+    st.mode, st.sha = state.MODE_DIFF, "a" * 40
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [])
+    commands.VdiffFilesCommand(window).run()
+    assert notices == [] and st.sha == "a" * 40
+    st.sha = None
+    commands.VdiffFilesCommand(window).run()
+    assert notices == ["No uncommitted changes in /repo"]
 
 
 def test_step_change_uses_blocks(rings):
@@ -476,14 +529,6 @@ def test_esc_rewinds_the_file_navigation_counts_from(loading):
 # --- cycling past the ends --------------------------------------------------
 
 
-@pytest.fixture
-def rings(monkeypatch):
-    """Record visual bells instead of drawing them"""
-    bells = []
-    monkeypatch.setattr(commands.render, "flash", lambda view: bells.append(view))
-    return bells
-
-
 def at_file(files, path):
     """A loaded working-tree view sitting on `path`"""
     view, window = sublime.View(), sublime.Window()
@@ -600,6 +645,9 @@ def test_next_unstaged_scans_forward_and_wraps():
     assert commands._next_unstaged(files, 2) == 2  # the slot we count from counts itself
     assert commands._next_unstaged(files, 3) == 0  # wraps past the end
     assert commands._next_unstaged(flagged(True, True), 0) == -1
+    # a partially staged file still has hunks to stage
+    partial = git.FileChange("p.py", "M", True, 1, 1, None, unstaged=True)
+    assert commands._next_unstaged(flagged(True, True) + [partial], 0) == 2
 
 
 def test_staging_moves_to_the_next_unstaged_file(monkeypatch):
@@ -653,6 +701,10 @@ def test_stage_all_and_unstage_all_need_something_to_do(monkeypatch):
     assert press(monkeypatch, "stage_all", flagged(True, True), "f0.py", []) == []
     assert press(monkeypatch, "unstage_all", flagged(False, False), "f0.py", []) == []
     assert messages == ["nothing to stage", "nothing to unstage"]
+    # a partially staged file is something to stage
+    partial = git.FileChange("p.py", "M", True, 1, 1, None, unstaged=True)
+    assert press(monkeypatch, "stage_all", flagged(True) + [partial], "f0.py", flagged(True, True)) == ["f0.py"]
+    assert messages[-1] == "staged 1 file"
     view, window, st = at_file(flagged(False), "f0.py")
     st.enter("abc", git.CommitInfo("abc", "abc1234", "Ann", "2026-09-23 10:00", "Fix things", ""))
     commands.ACTIONS["stage_all"](view, window, st)
@@ -670,6 +722,9 @@ def watched(monkeypatch, tmp_path, all_mode):
     st.files = [change("a.py"), change("b.py")]
     st.change, st.all_mode = st.files[0], all_mode
     st.fingerprint = commands.render.fingerprint(st)
+    # git status lists what the view lists, unless a test says otherwise
+    monkeypatch.setattr(commands, "run_async", lambda work, done: done(work()))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: list(st.files))
     return st, refreshes
 
 
@@ -696,6 +751,27 @@ def test_refresh_if_changed_watches_the_shown_file_and_the_index(monkeypatch, tm
     touch(tmp_path / "index")
     commands.refresh_if_changed(sublime.View(), st)
     assert refreshes == [st]
+
+
+@pytest.mark.parametrize("all_mode", [False, True])
+def test_refresh_if_changed_sees_a_file_changed_outside_the_list(monkeypatch, tmp_path, all_mode):
+    st, refreshes = watched(monkeypatch, tmp_path, all_mode=all_mode)
+    # no listed file and not the index moved, but git status now lists c.py too
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: st.files + [change("c.py")])
+    commands.refresh_if_changed(sublime.View(), st)
+    assert refreshes == [st]
+
+
+def test_a_stale_git_status_does_not_refresh(monkeypatch, tmp_path):
+    st, refreshes = watched(monkeypatch, tmp_path, all_mode=False)
+    pending = []
+    monkeypatch.setattr(commands, "run_async", lambda work, done: pending.append(done))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [])
+    commands.refresh_if_changed(sublime.View(), st)
+    # the user moved on to another file before git status answered
+    st.token += 1
+    pending[0]([change("c.py")])
+    assert refreshes == []
 
 
 def test_staging_the_only_file_leaves_an_empty_listing(monkeypatch):
@@ -744,9 +820,31 @@ def heading_row(st, path):
     return next(i for i, (c, _, section) in enumerate(st.all_rows) if section and c.path == path)
 
 
-def put_caret(view, row):
-    view.sel().clear()
-    view.sel().add(sublime.Region(commands.render.index_point(view, row)))
+def test_the_header_follows_the_caret_from_file_to_file():
+    from vdiff import listeners
+    view, st = all_files_view()
+    st.files[1] = git.FileChange("b.py", "M", False, 0, 4, None)
+    commands.render.render_all(view, st)
+    st.rendered_token = st.token
+    commands.render.init_view(view)
+    state.put(view, st)
+    title = lambda: view.phantoms[commands.render.PHANTOM_KEY][0].content.split("</div>", 1)[1]  # noqa: E731
+    listener = listeners.VdiffEventListener()
+    put_caret(view, heading_row(st, "b.py") + 1)
+    listener.on_selection_modified(view)
+    assert st.change.path == "b.py" and ">b.py<" in title() and '<span class="del">-4</span> <span class="ins">+0</span>' in title()
+    # within the same file nothing is redrawn; back in a.py the header is a.py's again
+    shown = view.phantoms[commands.render.PHANTOM_KEY]
+    listener.on_selection_modified(view)
+    assert view.phantoms[commands.render.PHANTOM_KEY] is shown
+    put_caret(view, heading_row(st, "a.py"))
+    listener.on_selection_modified(view)
+    assert ">a.py<" in title() and '<span class="del">-1</span> <span class="ins">+1</span>' in title()
+    # not while a render is pending: the rows describe the old text
+    st.token += 1
+    put_caret(view, heading_row(st, "b.py"))
+    listener.on_selection_modified(view)
+    assert st.change.path == "a.py"
 
 
 def test_all_files_step_change_from_a_heading_lands_on_its_first_hunk():
@@ -808,3 +906,101 @@ def test_all_files_context_zero_shows_only_changed_lines(monkeypatch):
     view, st = all_files_view()
     shown = [line for _, line, _ in st.all_rows if line is not None]
     assert shown and all(line.kind != " " for line in shown)
+
+
+def test_refresh_in_the_all_files_view_relists_the_working_tree(monkeypatch):
+    view, st = all_files_view()
+    st.change = st.files[0]
+    monkeypatch.setattr(commands, "run_async", lambda work, done: done(work()))
+    # b.py was reverted and c.py is new since the view was drawn
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [change("a.py"), change("c.py")])
+    shown = []
+    monkeypatch.setattr(commands, "show_all", lambda view, st, focus=None: shown.append(focus))
+    commands.ACTIONS["refresh"](view, None, st)
+    assert shown == ["a.py"] and [c.path for c in st.files] == ["a.py", "c.py"]
+
+
+@pytest.mark.parametrize("all_mode, expected", [(False, ("file", "b.py")), (True, ("all", "b.py"))])
+def test_restore_falls_back_to_the_first_changed_file(monkeypatch, tmp_path, all_mode, expected):
+    view = sublime.View()
+    view.settings().set(state.VIEW_DATA, {"repo": str(tmp_path), "sha": None, "path": "gone.py", "all_mode": all_mode})
+    monkeypatch.setattr(commands, "run_async", lambda work, done: done(work()))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [change("b.py"), change("c.py")])
+    shown = []
+    monkeypatch.setattr(commands, "show_all", lambda view, st, focus=None: shown.append(("all", st.change.path)))
+    monkeypatch.setattr(commands, "show_file", lambda view, st, c: shown.append(("file", c.path)))
+    commands.restore_view(view)
+    assert shown == [expected]
+
+
+def test_restore_with_no_changes_left_says_so(monkeypatch, tmp_path):
+    view = sublime.View()
+    view.settings().set(state.VIEW_DATA, {"repo": str(tmp_path), "sha": None, "path": "gone.py"})
+    monkeypatch.setattr(commands, "run_async", lambda work, done: done(work()))
+    monkeypatch.setattr(commands.git, "changed_files", lambda repo: [])
+    messages = []
+    monkeypatch.setattr(commands.render, "render_message", lambda view, st, text: messages.append(text))
+    commands.restore_view(view)
+    assert messages == [f"No uncommitted changes in {tmp_path}"]
+
+
+def test_open_in_the_all_files_view_maps_a_deleted_row_like_the_single_file_view(tmp_path):
+    from vdiff import parse
+    view, st = all_files_view()
+    st.repo = str(tmp_path)
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "b.py").write_text("")
+    lines_b = [parse.Line(" ", i, i, f"b{i}") for i in range(1, 5)] + [parse.Line("-", 5, None, "old b5"),
+                                                                       parse.Line(" ", 6, 5, "b6")]
+    st.all_diffs["b.py"] = (lines_b, parse.change_blocks(lines_b), False)
+    commands.render.render_all(view, st)
+    opened = []
+
+    class Window:
+        def open_file(self, name, flags=0):
+            opened.append(name)
+
+    def open_at(match):
+        put_caret(view, next(i for i, (_, line, _) in enumerate(st.all_rows) if line is not None and match(line)))
+        commands.ACTIONS["open"](view, Window(), st)
+
+    # the deleted row opens at the line that took its place, as in the single-file view, not at line 1
+    open_at(lambda line: line.kind == "-")
+    # a surviving row keeps its own number
+    open_at(lambda line: line.new_no == 26)
+    assert opened == [f"{tmp_path}/b.py:5", f"{tmp_path}/a.py:26"]
+
+
+def test_a_blank_row_in_the_all_files_view_is_no_file(monkeypatch):
+    view, st = all_files_view()
+    messages, ran = [], []
+    monkeypatch.setattr(commands, "status", messages.append)
+    monkeypatch.setattr(commands, "run_async", lambda work, done: ran.append(work))
+    # the caret was on a.py, then moved to the blank row above b.py: git actions and open act on nothing
+    put_caret(view, heading_row(st, "a.py") + 1)
+    commands.render.follow_caret(view, st)
+    put_caret(view, heading_row(st, "b.py") - 1)
+    commands.ACTIONS["discard"](view, None, st)
+    commands.ACTIONS["stage"](view, None, st)
+    commands.ACTIONS["open"](view, None, st)
+    assert ran == [] and messages == ["no file under the caret"] * 3
+
+
+@pytest.mark.parametrize("action, path", [("next_file", "b.py"), ("prev_file", "a.py")])
+def test_a_blank_row_steps_files_as_the_gap_above_the_file_below(action, path):
+    view, st = all_files_view()
+    st.change = st.files[0]
+    put_caret(view, heading_row(st, "b.py") - 1)
+    commands.ACTIONS[action](view, None, st)
+    assert st.change.path == path
+
+
+def test_a_blank_row_steps_changes_as_the_gap_above_the_file_below():
+    view, st = all_files_view()
+    put_caret(view, heading_row(st, "b.py") - 1)
+    commands.ACTIONS["next_change"](view, None, st)
+    assert st.change.path == "b.py"
+    put_caret(view, heading_row(st, "b.py") - 1)
+    commands.ACTIONS["prev_change"](view, None, st)
+    # a.py's last hunk, not the first or last of the whole list from nowhere
+    assert st.change.path == "a.py" and commands.render.caret_index(view) == st.all_change_rows[1]

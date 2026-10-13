@@ -1,4 +1,4 @@
-"""vDiff plugin entry point: review uncommitted changes and recent commits inside Sublime Text
+"""vDiff plugin entry point: review uncommitted changes, recent commits and branches inside Sublime Text
 
 Sublime reloads a plugin only when this file changes, so save it after editing a submodule
 """
@@ -14,6 +14,7 @@ for _name in [n for n in sys.modules if n.startswith(__package__ + ".vdiff")]:
 # command and listener classes are imported for sublime's discovery
 from .vdiff.commands import (
     VdiffActionCommand,
+    VdiffBranchesCommand,
     VdiffCommitsCommand,
     VdiffFilesCommand,
     restore_view,

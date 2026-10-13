@@ -42,6 +42,21 @@ FILE_STATUS_FOREGROUND = "#ffffff"
 # sublime's former markup.deleted / markup.inserted colours
 FILE_DEL_FOREGROUND = "#d64646"
 FILE_INS_FOREGROUND = "#46d646"
+# red / green text on the plain editor background (the branches view's -/+ counts and tags): a region
+# only recolours its text when it is filled, so these carry the nudged editor background like SCOPE_CTX
+SCOPE_TEXT_DEL = "vdiff.text.del"
+SCOPE_TEXT_INS = "vdiff.text.ins"
+# the commit under the caret in the branches view: the scheme's own line-highlight colour, on its cells only,
+# and the red / green text of its counts and tags on that colour
+SCOPE_CURSOR = "vdiff.commit.cursor"
+SCOPE_CURSOR_DEL = "vdiff.commit.cursor.del"
+SCOPE_CURSOR_INS = "vdiff.commit.cursor.ins"
+# blend towards the foreground when the scheme names no line highlight
+CURSOR_BLEND = 0.12
+# the rules written whatever the settings say, by the view that needs them, so the restart hint names what is pending
+DIFF_SCOPES: Tuple[str, ...] = (SCOPE_FILE_HEADER, SCOPE_FILE_STATUS, SCOPE_FILE_DEL_COUNT, SCOPE_FILE_INS_COUNT)
+BRANCH_SCOPES: Tuple[str, ...] = (SCOPE_FILE_HEADER, SCOPE_FILE_DEL_COUNT, SCOPE_FILE_INS_COUNT, SCOPE_TEXT_DEL, SCOPE_TEXT_INS,
+                                  SCOPE_CURSOR, SCOPE_CURSOR_DEL, SCOPE_CURSOR_INS)
 
 # colours the user may set; an empty line colour keeps the colour scheme's tint or the plain-text look
 COLOUR_SETTINGS: Tuple[str, ...] = ("deleted_line_background", "inserted_line_background",
@@ -96,8 +111,8 @@ PALETTE_PROBES: Tuple[str, ...] = (
 _palettes: Dict[str, Dict[str, int]] = {}
 # the override name the last ensure() resolved, so scope_for knows which palette to read
 _active: Optional[str] = None
-# schemes the user has already been told need a restart
-_notified: Set[Optional[str]] = set()
+# (scheme, scopes) settled for this session: the user was told they need a restart, or they were found live
+_notified: Set[Tuple[Optional[str], Tuple[str, ...]]] = set()
 # {override file name: the user colours it was provisioned with}, so changing one re-provisions
 _provisioned_with: Dict[str, Dict[str, str]] = {}
 
@@ -111,15 +126,19 @@ def reset() -> None:
     _active = None
 
 
-def claim_restart_notice(view: sublime.View) -> bool:
-    """Whether to tell the user to restart; True at most once per scheme
+def claim_restart_notice(view: sublime.View, scopes: Tuple[str, ...], tokens: bool = True) -> bool:
+    """Whether to tell the user to restart for `scopes` (and the token layer, with `tokens`); True at most once per scheme and set
 
-    Only when the override is written but not yet loaded
+    Only when the override is written but the rules a view needs are not loaded yet; a view that needs
+    only rules already live after an upgrade is not sent to restart for the others. Either answer is
+    settled until the override is written again, so a render does not probe the scheme each time
     """
-    if not (_active and _palettes.get(_active)) or tokens_resolved(view, KINDS) or _active in _notified:
+    key = (_active, scopes)
+    if not (_active and _palettes.get(_active)) or key in _notified:
         return False
-    _notified.add(_active)
-    return True
+    _notified.add(key)
+    live = (not tokens or tokens_resolved(view, KINDS)) and all(scope_background(view, scope) for scope in scopes)
+    return not live
 
 
 def scope_background(view: sublime.View, scope: str) -> Optional[str]:
@@ -190,6 +209,35 @@ def line_scope(view: sublime.View, kind: str) -> str:
     return own if settings().get(setting) and scope_background(view, own) else scheme
 
 
+def text_scope(view: sublime.View, kind: str) -> str:
+    """Scope painting text red ("del") or green ("ins") on the editor background, once its rule is live
+
+    Until the restart that loads it, the scheme's diff tint stands in: a coloured background rather than plain text
+    """
+    own, scheme = (SCOPE_TEXT_DEL, SCOPE_DEL) if kind == "del" else (SCOPE_TEXT_INS, SCOPE_INS)
+    return own if scope_background(view, own) else scheme
+
+
+def count_scope(view: sublime.View, kind: str) -> str:
+    """Scope painting text red ("del") or green ("ins") on the file-heading background, once both rules are live
+
+    Before that, text_scope's stand-in: the heading tint is then a scheme fallback with no matching text rule anyway
+    """
+    own = SCOPE_FILE_DEL_COUNT if kind == "del" else SCOPE_FILE_INS_COUNT
+    return own if scope_background(view, SCOPE_FILE_HEADER) and scope_background(view, own) else text_scope(view, kind)
+
+
+def cursor_scope(view: sublime.View) -> Optional[str]:
+    """Scope tinting the commit under the caret like a highlighted line, or None until its rule is live"""
+    return SCOPE_CURSOR if scope_background(view, SCOPE_CURSOR) else None
+
+
+def cursor_text_scope(view: sublime.View, kind: str) -> str:
+    """Scope painting text red ("del") or green ("ins") on the cursor's background, once live, else text_scope's stand-in"""
+    own = SCOPE_CURSOR_DEL if kind == "del" else SCOPE_CURSOR_INS
+    return own if scope_background(view, own) else text_scope(view, kind)
+
+
 def line_numbers_scope(view: sublime.View) -> str:
     """Scope for the all-files line-number column: the user's colours once their rule is live, else plain text"""
     if (settings().get("line_numbers_foreground") or settings().get("line_numbers_background")) \
@@ -233,6 +281,8 @@ def ensure(view: sublime.View) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(scheme, f, indent=4)
+        # new rules: whether they are live is an open question again
+        _notified.difference_update({key for key in _notified if key[0] == name})
         LOG.info("provisioned %d colours into colour scheme override %s", len(colours), path)
     except Exception:
         LOG.warning("could not write colour scheme override %s", path, exc_info=True)
@@ -271,14 +321,31 @@ def _tints(view: sublime.View, user: Dict[str, str]) -> Dict[str, str]:
     return tints
 
 
-def _global_background(view: sublime.View) -> str:
-    """The scheme's editor background; style_for_scope reports none for scopes that do not set one"""
+def _global(view: sublime.View, key: str) -> Optional[str]:
+    """One of the scheme's global colours (background, line_highlight, ...), None when unset or unreadable"""
     try:
-        background = view.style().get("background")
+        return view.style().get(key)
     except Exception:
         LOG.debug("view.style failed", exc_info=True)
-        background = None
-    return background or "#000000"
+        return None
+
+
+def _global_background(view: sublime.View) -> str:
+    """The scheme's editor background; style_for_scope reports none for scopes that do not set one"""
+    return _global(view, "background") or "#000000"
+
+
+def _line_highlight(view: sublime.View) -> str:
+    """The scheme's line-highlight colour, else the editor background blended a little towards the foreground"""
+    return _global(view, "line_highlight") or _blend(_global_background(view), foreground(view, "text.plain") or "#ffffff", CURSOR_BLEND)
+
+
+def _blend(colour: str, towards: str, fraction: float) -> str:
+    """#rrggbb moved `fraction` of the way towards `towards`; a colour in another form is returned as it is"""
+    if not (colour.startswith("#") and len(colour) >= 7 and towards.startswith("#") and len(towards) >= 7):
+        return colour
+    mixed = (round(int(colour[i:i + 2], 16) * (1 - fraction) + int(towards[i:i + 2], 16) * fraction) for i in (1, 3, 5))
+    return "#" + "".join(f"{min(255, max(0, c)):02x}" for c in mixed)
 
 
 def _nudge(colour: str) -> str:
@@ -310,13 +377,21 @@ def _merge_rules(rules: List[Dict[str, str]], tints: Dict[str, str], colours: Di
     the line's colours; plain tints are added only when missing and never overwritten, so a hand-tuned one survives
     """
     present = {rule.get("scope"): rule for rule in rules}
-    # the all-files file heading and its deletion and insertion counts
+    # the all-files file heading, the commit cursor of the branches view in the line-highlight colour (with the
+    # foreground, so the text keeps its colour), then bold coloured text on the heading, on the editor background
+    # (the branches view's counts and tags) and on the cursor, all in the heading counts' red and green
     header = user["file_header_background"] or FILE_HEADER_BACKGROUND
-    wanted = [{"scope": SCOPE_FILE_HEADER, "background": header}]
-    for scope, colour in ((SCOPE_FILE_STATUS, user["file_header_status_foreground"] or FILE_STATUS_FOREGROUND),
-                          (SCOPE_FILE_DEL_COUNT, user["file_header_deleted_foreground"] or FILE_DEL_FOREGROUND),
-                          (SCOPE_FILE_INS_COUNT, user["file_header_inserted_foreground"] or FILE_INS_FOREGROUND)):
-        wanted.append({"scope": scope, "background": header, "foreground": colour, "font_style": "bold"})
+    plain = _nudge(_global_background(view))
+    highlight = _line_highlight(view)
+    red = user["file_header_deleted_foreground"] or FILE_DEL_FOREGROUND
+    green = user["file_header_inserted_foreground"] or FILE_INS_FOREGROUND
+    wanted = [{"scope": SCOPE_FILE_HEADER, "background": header},
+              {"scope": SCOPE_CURSOR, "background": highlight, "foreground": foreground(view, "text.plain") or "#ffffff"}]
+    for scope, background, colour in ((SCOPE_FILE_STATUS, header, user["file_header_status_foreground"] or FILE_STATUS_FOREGROUND),
+                                      (SCOPE_FILE_DEL_COUNT, header, red), (SCOPE_FILE_INS_COUNT, header, green),
+                                      (SCOPE_TEXT_DEL, plain, red), (SCOPE_TEXT_INS, plain, green),
+                                      (SCOPE_CURSOR_DEL, highlight, red), (SCOPE_CURSOR_INS, highlight, green)):
+        wanted.append({"scope": scope, "background": background, "foreground": colour, "font_style": "bold"})
     # the user's line colours; an unset one keeps any old rule, which render then ignores
     for scope, setting in ((SCOPE_LINE_DEL, "deleted_line_background"), (SCOPE_LINE_INS, "inserted_line_background")):
         if user[setting]:

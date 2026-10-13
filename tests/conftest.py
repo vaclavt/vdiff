@@ -23,3 +23,25 @@ def scheme_override_sandbox(tmp_path, monkeypatch):
     palette.reset()
     monkeypatch.setattr(state, "STATES", {})
     monkeypatch.setattr(sublime, "packages_path", lambda: str(tmp_path))
+
+
+@pytest.fixture
+def rings(monkeypatch):
+    """Record visual bells instead of drawing them"""
+    import sublime  # noqa: F401  (the stub must be importable before vdiff.render)
+
+    from vdiff import render
+
+    bells = []
+    monkeypatch.setattr(render, "flash", lambda view: bells.append(view))
+    return bells
+
+
+def put_caret(view, row):
+    """Move the stub view's caret to the start of `row` (0 is the first row below the header)"""
+    import sublime
+
+    from vdiff import render
+
+    view.sel().clear()
+    view.sel().add(sublime.Region(render.index_point(view, row)))

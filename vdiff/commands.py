@@ -6,10 +6,10 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import sublime
 import sublime_plugin
 
-from . import git, parse, render, state
+from . import branches, git, parse, render, state
 from .git import Commit, FileChange
-from .state import Kept, ViewState
-from .utils import file_count, run_async, settings, status
+from .state import MODE_BRANCHES, Kept, ViewState
+from .utils import DEBOUNCE_MS, commits_count, file_count, run_async, settings, status
 
 # an ACTIONS entry: act(view, window, state) on the review view it fired in
 Action = Callable[[sublime.View, sublime.Window, ViewState], None]
@@ -30,9 +30,6 @@ COMMIT_KIND = (sublime.KIND_ID_COLOR_BLUISH, "c", "commit")
 # row width shared by subject and annotation; the subject is clipped to fit, never below MIN_SUBJECT_WIDTH
 COMMIT_ROW_WIDTH = 120
 MIN_SUBJECT_WIDTH = 24
-
-# highlight-to-preview delay: holding an arrow key must not spawn a git process per row
-PREVIEW_DELAY_MS = 60
 
 # cache directory -> repo root: resolve_repo runs git on the UI thread
 _roots: Dict[str, str] = {}
@@ -185,6 +182,22 @@ def commit_items(commits: Sequence[Commit]) -> List[sublime.QuickPanelItem]:
     return items
 
 
+def redisplay(view: sublime.View, st: ViewState, keep_caret: bool = False) -> None:
+    """Redraw whatever the state describes: the branches view, all diffs, or the current file"""
+    if st.in_branches:
+        branches.load(view, st, keep_caret=keep_caret)
+    elif st.all_mode:
+        show_all(view, st)
+    elif st.change is not None:
+        show_file(view, st, st.change)
+
+
+def redisplay_if_stale(view: sublime.View, st: ViewState) -> None:
+    """Redraw when the screen shows something else than the state describes, or a render is still on its way"""
+    if st.drawn != st.describe() or st.rendered_token != st.token:
+        redisplay(view, st)
+
+
 def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, files: List[FileChange],
                      kept: Kept, on_cancel: Optional[Callable[[], None]] = None,
                      placeholder: str = "Changed files") -> None:
@@ -215,13 +228,10 @@ def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, 
             if on_cancel is not None:
                 st.restore(kept)
                 on_cancel()
-            elif kept.change is not None:
-                # reshow the kept file in the kept mode
+            elif kept.mode == MODE_BRANCHES or kept.change is not None:
+                # back to the branches view or the kept file in the kept mode, unless the screen still shows it
                 st.restore(kept)
-                if st.all_mode:
-                    show_all(view, st)
-                else:
-                    show_file(view, st, kept.change)
+                redisplay_if_stale(view, st)
             # nothing was kept before: the last previewed file stays
             return
         change = files[index]
@@ -241,7 +251,7 @@ def show_files_panel(window: sublime.Window, view: sublime.View, st: ViewState, 
             if ticket == st.highlight:
                 show(files[index])
 
-        sublime.set_timeout(preview, PREVIEW_DELAY_MS)
+        sublime.set_timeout(preview, DEBOUNCE_MS)
 
     if st.all_mode and files:
         st.change = files[selected]
@@ -286,11 +296,25 @@ def refresh_listing(view: sublime.View, st: ViewState, message: Optional[str] = 
 
 
 def refresh_if_changed(view: sublime.View, st: ViewState) -> None:
-    """Re-render a working-tree view when the file or the index changed since it was drawn"""
+    """Re-render a working-tree view when a shown file, the index or the list of changed files moved since it was drawn;
+    the branches view keeps its own check"""
+    if st.in_branches:
+        branches.refresh_if_changed(view, st)
+        return
     if st.in_commit or st.change is None:
         return
     if render.fingerprint(st) != st.fingerprint:
         refresh_listing(view, st)
+        return
+    # the mtimes watch only the listed files; git status, off the UI thread, sees a file newly changed outside the list
+    token = st.token
+
+    def done(files: List[FileChange]) -> None:
+        """Re-list when the working tree's changes are no longer the listed ones, unless a newer render took over"""
+        if view.is_valid() and token == st.token and files != st.files:
+            refresh_listing(view, st)
+
+    run_async(lambda: git.changed_files(st.repo), done)
 
 
 class VdiffFilesCommand(sublime_plugin.WindowCommand):
@@ -307,6 +331,10 @@ class VdiffFilesCommand(sublime_plugin.WindowCommand):
         def done(files: List[FileChange]) -> None:
             """Show the files panel, or a notice when there is nothing uncommitted"""
             if not view.is_valid():
+                return
+            if not files and (st.in_branches or st.in_commit):
+                # the notice would replace a view that still holds: the branches, or a commit under review
+                status("no uncommitted changes")
                 return
             kept = st.enter()
             if not files:
@@ -331,7 +359,7 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
         if sha:
             self.open_commit(view, st, sha, None)
             return
-        count = int(settings().get("commits_count", 30) or 30)
+        count = commits_count()
 
         def done(commits: List[Commit]) -> None:
             """Show the commits panel unless the repository has none"""
@@ -352,9 +380,12 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
                 selected = i
 
         def on_select(index: int) -> None:
-            """Open the chosen commit's files, remembering its row for Esc"""
+            """Open the chosen commit's files, remembering its row for Esc; Esc itself redraws what the state went
+            back to when the list was reopened from a commit's files, whose diff is still on screen"""
             if index != -1:
                 self.open_commit(view, st, commits[index].sha, index)
+            else:
+                redisplay_if_stale(view, st)
 
         self.window.show_quick_panel(items, on_select, 0, selected, None, "Recent commits")
 
@@ -383,6 +414,16 @@ class VdiffCommitsCommand(sublime_plugin.WindowCommand):
         run_async(lambda: git.commit_with_files(st.repo, sha), done)
 
 
+class VdiffBranchesCommand(sublime_plugin.WindowCommand):
+    """Show the branches view: local branches and remotes, and the log of the selected one"""
+
+    def run(self) -> None:
+        """Open the review view and list the branches off the UI thread"""
+        opened = open_review(self.window)
+        if opened:
+            branches.load(*opened)
+
+
 # --- review view actions ----------------------------------------------------
 
 
@@ -394,6 +435,11 @@ def _act_files(view: sublime.View, window: sublime.Window, st: ViewState) -> Non
 def _act_commits(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
     """Open the recent-commits panel"""
     window.run_command("vdiff_commits")
+
+
+def _act_branches(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
+    """Show (or reload) the branches view"""
+    window.run_command("vdiff_branches")
 
 
 def _act_close(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
@@ -414,8 +460,11 @@ def _git_action(verb: str, done_verb: str, operation: Callable[[str, FileChange]
     def act(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
         """Confirm if asked, run the operation off the UI thread, then refresh the listing"""
         change = _current_change(view, st)
-        if st.in_commit or change is None:
+        if st.in_commit:
             status(f"{verb} works on uncommitted changes only")
+            return
+        if change is None:
+            status("no file under the caret")
             return
         if confirm is not None and not confirm(change):
             return
@@ -464,10 +513,10 @@ def _confirm_discard(change: FileChange) -> bool:
 
 
 def _next_unstaged(files: Sequence[FileChange], start: int) -> int:
-    """Index of the first unstaged file from `start` on, wrapping round; -1 when every file is staged"""
+    """Index of the first file with something to stage from `start` on, wrapping round; -1 when everything is staged"""
     for offset in range(len(files)):
         index = (start + offset) % len(files)
-        if not files[index].staged:
+        if files[index].has_unstaged:
             return index
     return -1
 
@@ -482,24 +531,20 @@ def _stage_next(files: Sequence[FileChange], index: int) -> Optional[FileChange]
 
 
 def _act_refresh(view: sublime.View, window: sublime.Window, st: ViewState) -> None:
-    """Reload what is shown: all diffs, the commit's file, or the working-tree listing"""
-    if st.all_mode:
-        show_all(view, st)
-        return
-    if st.change is None:
-        return
-    if st.in_commit:
-        show_file(view, st, st.change)
-    else:
+    """Reload what is shown: the branches, the commit's diffs, or the working tree re-listed (new and reverted files too)"""
+    if st.in_branches or st.in_commit:
+        redisplay(view, st, keep_caret=True)
+    elif st.all_mode or st.change is not None:
         refresh_listing(view, st)
 
 
 def _current_change(view: sublime.View, st: ViewState) -> Optional[FileChange]:
-    """File under the caret in the aggregate view (made current), else the shown file"""
+    """File under the caret in the aggregate view (made current), None on a blank row or the top row; else the shown file"""
     if st.all_mode:
         change = render.all_change_at(view, st)
         if change is not None:
             st.change = change
+        return change
     return st.change
 
 
@@ -507,6 +552,7 @@ def _act_open(view: sublime.View, window: sublime.Window, st: ViewState) -> None
     """Open the working-tree file at the line under the caret"""
     change = _current_change(view, st)
     if change is None:
+        status("no file under the caret")
         return
     path = os.path.join(st.repo, change.path)
     if not os.path.exists(path):
@@ -516,7 +562,10 @@ def _act_open(view: sublime.View, window: sublime.Window, st: ViewState) -> None
     if st.all_mode:
         row = render.caret_index(view)
         displayed = st.all_rows[row][1] if 0 <= row < len(st.all_rows) else None
-        line = displayed.new_no if displayed and displayed.new_no is not None else 1
+        # the row's slot in the file's whole diff (a heading is its start), mapped as the single-file view maps it
+        lines = st.all_diffs.get(change.path, ([], [], False))[0]
+        index = next((i for i, line in enumerate(lines) if line is displayed), 0)
+        line = parse.line_for_open(lines, index)
     else:
         line = parse.line_for_open(st.lines, render.caret_index(view))
     window.open_file(f"{path}:{line}", sublime.ENCODED_POSITION)
@@ -565,9 +614,13 @@ def _step_file(delta: int) -> Action:
                 status("no files to step through")
                 return
             change = _current_change(view, st)
-            index = state.find_change(st.files, change.path if change else None)
-            # nothing selected yet: n starts at the first file, p at the last
-            index = (index + delta) % len(st.files) if index >= 0 else (0 if delta > 0 else len(st.files) - 1)
+            if change is not None:
+                index = (state.find_change(st.files, change.path) + delta) % len(st.files)
+            else:
+                # a blank row or the top row sits above a file: n goes to that file, p to the one before it
+                below = render.all_change_below(view, st)
+                index = state.find_change(st.files, below.path) if below else 0
+                index = (index if delta > 0 else index - 1) % len(st.files)
             st.change = st.files[index]
             st.collapsed.discard(st.change.path)
             render.render_all(view, st, focus=st.change.path, center=True)
@@ -600,7 +653,8 @@ def _step_change(delta: int) -> Action:
         """Jump to the next or previous change, across files in the aggregate view"""
         if st.all_mode:
             # aggregate view: the hunks of all files are the targets
-            current_change = _current_change(view, st)
+            # a blank row or the top row counts as above the file below it: ] goes to its first hunk, [ before it
+            current_change = _current_change(view, st) or render.all_change_below(view, st)
             rows = st.all_change_rows
             targets = st.all_change_targets
             if not targets:
@@ -720,11 +774,12 @@ def _move_line(forward: bool) -> Action:
 ACTIONS: Dict[str, Action] = {
     "files": _act_files,
     "commits": _act_commits,
+    "branches": _act_branches,
     "close": _act_close,
     "help": _act_help,
     "stage": _git_action("stage", "staged", git.stage, pick=_stage_next),
     "unstage": _git_action("unstage", "unstaged", git.unstage),
-    "stage_all": _bulk_action("stage", "staged", git.stage_all, lambda c: not c.staged),
+    "stage_all": _bulk_action("stage", "staged", git.stage_all, lambda c: c.has_unstaged),
     "unstage_all": _bulk_action("unstage", "unstaged", git.unstage_all, lambda c: c.staged),
     "discard": _git_action("discard", "discarded", git.discard, confirm=_confirm_discard),
     "commit": _act_commit,
@@ -742,6 +797,8 @@ ACTIONS: Dict[str, Action] = {
     "line_down": _move_line(True),
     "line_up": _move_line(False),
 }
+# the branches view's actions: the keymap reaches them through the vdiff_mode context
+ACTIONS.update(branches.ACTIONS)
 
 
 class VdiffActionCommand(sublime_plugin.TextCommand):
@@ -766,18 +823,24 @@ def restore_view(view: sublime.View) -> ViewState:
     # the repo, commit and file saved with the view
     data = view.settings().get(state.VIEW_DATA) or {}
     repo = data.get("repo")
-    render.init_view(view)
+    mode = data.get("mode") or state.MODE_DIFF
+    render.init_view(view, mode)
     # repository gone: show a notice
     if not repo or not os.path.isdir(repo):
         st = state.put(view, state.ViewState(""))
-        render.render_message(view, st, "Repository not found. Press f for changed files, c for commits.")
+        render.render_message(view, st, "Repository not found. Press f for changed files, c for commits, b for branches.")
         return st
     st = state.put(view, state.ViewState(repo))
     st.sha = data.get("sha")
     st.all_mode = bool(data.get("all_mode", False))
+    # the branches view comes back on the same branch
+    if mode == MODE_BRANCHES:
+        st.mode, st.branch_ref = mode, data.get("ref")
+        redisplay(view, st)
+        return st
     path = data.get("path")
     if not path:
-        render.render_message(view, st, "Press f for changed files, c for commits.")
+        render.render_message(view, st, "Press f for changed files, c for commits, b for branches.")
         return st
     # stand-in FileChange: no line counts or rename source
     change = git.FileChange(path, data.get("status", "M"), bool(data.get("staged")), None, None, None)
@@ -788,28 +851,20 @@ def restore_view(view: sublime.View) -> ViewState:
 
         def show_commit(result: Tuple[git.CommitInfo, List[FileChange]]) -> None:
             """Adopt the commit's files and redraw the saved file or the aggregate view"""
-            st.commit, st.files = result
-            if st.all_mode:
-                st.change = change
-                show_all(view, st)
-            else:
-                show_file(view, st, change)
+            st.commit, st.files, st.change = result[0], result[1], change
+            redisplay(view, st)
 
         run_async(lambda: git.commit_with_files(repo, sha), show_commit)
     else:
 
         def show_working_tree(files: List[FileChange]) -> None:
-            """Redraw the saved file if it still has changes, else say it has none"""
+            """Redraw the saved file, or the first changed one when it has no changes any more"""
             st.files = files
-            index = state.find_change(files, path)
-            if index >= 0:
-                if st.all_mode:
-                    st.change = files[index]
-                    show_all(view, st)
-                else:
-                    show_file(view, st, files[index])
-            else:
-                render.render_message(view, st, f"{path} has no uncommitted changes any more")
+            if not files:
+                render.render_message(view, st, f"No uncommitted changes in {repo}")
+                return
+            st.change = files[max(0, state.find_change(files, path))]
+            redisplay(view, st)
 
         run_async(lambda: git.changed_files(repo), show_working_tree)
     return st

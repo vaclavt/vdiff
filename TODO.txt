@@ -6,8 +6,7 @@
 ## New functionality
 - Add (commit) summary view - in one view just changes across all files with 5 lines before and after change?)
 
-- Add pull and push action
-- Add tags into commits list (and branches?)
+- Add tags into commits list (the branches view shows them already)
 - Add stash action ..
 
 

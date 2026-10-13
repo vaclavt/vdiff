@@ -3,7 +3,7 @@ import bisect
 import html
 import logging
 import os
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 import sublime
 import sublime_plugin
@@ -11,7 +11,7 @@ import sublime_plugin
 from . import git, palette, parse
 from .git import FileChange, STATUS_NAMES
 from .parse import Block, Line
-from .state import VIEW_FLAG, ViewState
+from .state import MODE_BRANCHES, MODE_DIFF, MODE_SETTING, VIEW_FLAG, ViewState
 from .utils import file_count, settings, status
 
 LOG = logging.getLogger("vdiff")
@@ -27,6 +27,16 @@ KEY_FILE_DEL_COUNT = palette.SCOPE_FILE_DEL_COUNT
 KEY_FILE_INS_COUNT = palette.SCOPE_FILE_INS_COUNT
 KEY_FILE_STATUS = palette.SCOPE_FILE_STATUS
 KEY_FILE_PREFIX = "vdiff.file.prefix"
+KEY_BRANCH_SEL = "vdiff.branch.sel"
+KEY_BRANCH_DEL = "vdiff.branch.del"
+KEY_BRANCH_INS = "vdiff.branch.ins"
+KEY_BRANCH_STANDING_DEL = "vdiff.branch.standing.del"
+KEY_BRANCH_STANDING_INS = "vdiff.branch.standing.ins"
+KEY_BRANCH_SEL_DEL = "vdiff.branch.sel.del"
+KEY_BRANCH_SEL_INS = "vdiff.branch.sel.ins"
+KEY_BRANCH_CURSOR = "vdiff.branch.cursor"
+KEY_BRANCH_CURSOR_DEL = "vdiff.branch.cursor.del"
+KEY_BRANCH_CURSOR_INS = "vdiff.branch.cursor.ins"
 REGION_KEYS = (
     KEY_DEL,
     KEY_INS,
@@ -39,6 +49,16 @@ REGION_KEYS = (
     KEY_FILE_INS_COUNT,
     KEY_FILE_STATUS,
     KEY_FILE_PREFIX,
+    KEY_BRANCH_SEL,
+    KEY_BRANCH_DEL,
+    KEY_BRANCH_INS,
+    KEY_BRANCH_STANDING_DEL,
+    KEY_BRANCH_STANDING_INS,
+    KEY_BRANCH_SEL_DEL,
+    KEY_BRANCH_SEL_INS,
+    KEY_BRANCH_CURSOR,
+    KEY_BRANCH_CURSOR_DEL,
+    KEY_BRANCH_CURSOR_INS,
 )
 
 PHANTOM_KEY = "vdiff.header"
@@ -65,6 +85,7 @@ SCOPE_FILE_HEADER = palette.SCOPE_FILE_HEADER
 
 # sublime loads a newly created scheme override only after a restart
 NEEDS_RESTART = "restart Sublime Text to finish enabling syntax highlighting on changed lines"
+NEEDS_RESTART_BRANCHES = "restart Sublime Text to finish enabling the colours of the branches view"
 
 
 # actions: the ACTIONS names the row runs, a link when there is one; short: status-bar label, "" omits it
@@ -104,10 +125,11 @@ KEY_GROUPS: List[Tuple[str, bool, List[Key]]] = [
         "View",
         True,
         [
+            Key("r", "refresh", "refresh", ("refresh",)),
             Key("f", "changed files", "files", ("files",)),
             Key("c", "recent commits", "commits", ("commits",)),
+            Key("b", "branches", "branches", ("branches",)),
             Key("v", "toggle all-files view", "view", ("view",)),
-            Key("r", "refresh", "refresh", ("refresh",)),
             Key("left right", "collapse / expand file", "fold", ("collapse", "expand")),
             Key("z", "collapse / expand all files", "", ("fold_all",)),
             Key("esc", "close the view", "", ("close",)),
@@ -115,12 +137,59 @@ KEY_GROUPS: List[Tuple[str, bool, List[Key]]] = [
     ),
 ]
 
-KEYS: List[Key] = [key for _, _, group in KEY_GROUPS for key in group]
+# the keys of the branches view; the "applies in a commit" flag has no meaning there
+BRANCH_KEY_GROUPS: List[Tuple[str, bool, List[Key]]] = [
+    (
+        "Navigate",
+        True,
+        [
+            Key("J K", "next / previous branch", "branch", ("next_branch", "prev_branch")),
+            Key("j k", "next / previous commit", "commit", ("next_commit", "prev_commit")),
+            Key("o v", "review the commit, or the changed files", "review", ("open_commit",)),
+        ],
+    ),
+    (
+        "Actions",
+        True,
+        [
+            Key("⏎", "checkout remote branch", "checkout", ("checkout",)),
+            Key("shift+⏎", "checkout a remote branch detached", "", ("checkout_detached",)),
+            Key("L", "pull", "pull", ("pull",)),
+            Key("P", "push, setting the upstream when missing", "push", ("push",)),
+            Key("F", "fetch all remotes and prune", "fetch", ("fetch",)),
+            Key("d", "delete the local branch", "delete", ("delete_branch",)),
+        ],
+    ),
+    (
+        "View",
+        True,
+        [
+            Key("f", "changed files", "files", ("files",)),
+            Key("c", "recent commits", "commits", ("commits",)),
+            Key("b", "reload the branches", "", ("branches",)),
+            Key("r", "refresh", "refresh", ("refresh",)),
+            Key("esc", "close the view", "", ("close",)),
+        ],
+    ),
+]
 
-KEY_HINTS = "   ".join(f"{k.keys} {k.short}" for k in KEYS if k.short)
+MODE_KEY_GROUPS: Dict[str, List[Tuple[str, bool, List[Key]]]] = {MODE_DIFF: KEY_GROUPS, MODE_BRANCHES: BRANCH_KEY_GROUPS}
 
-# the popup font is the editor's, so the key column is padded to a fixed width in characters
-_KEY_WIDTH = max(len(k.keys) for k in KEYS)
+
+def keys(mode: str = MODE_DIFF) -> List[Key]:
+    """Every key row of a mode's table"""
+    return [key for _, _, group in MODE_KEY_GROUPS[mode] for key in group]
+
+
+def key_hints(mode: str = MODE_DIFF) -> str:
+    """The status-bar line of a mode: its keys with a short label"""
+    return "   ".join(f"{k.keys} {k.short}" for k in keys(mode) if k.short)
+
+
+def _key_width(mode: str) -> int:
+    """The popup font is the editor's, so the key column is padded to a fixed width in characters"""
+    return max(len(k.keys) for k in keys(mode))
+
 
 HEADER_CSS = """
 body { margin: 0; padding: 0.5rem 0.8rem; background-color: color(var(--background) blend(var(--foreground) 93%)); }
@@ -170,11 +239,12 @@ def _clear_external_diagnostics(view: sublime.View) -> None:
                     view.erase_regions(key + suffix)
 
 
-def init_view(view: sublime.View) -> None:
+def init_view(view: sublime.View, mode: str = MODE_DIFF) -> None:
     """Settings a review view needs, applied once when it is created or restored"""
     s = view.settings()
-    # mark the view as vdiff's and turn off editor chrome that does not fit a diff
+    # mark the view as vdiff's, say which keys apply, and turn off editor chrome that does not fit a diff
     s.set(VIEW_FLAG, True)
+    s.set(MODE_SETTING, mode)
     # native line numbers would be wrong: deleted lines have none
     s.set("line_numbers", False)
     s.set("word_wrap", False)
@@ -202,7 +272,7 @@ def init_view(view: sublime.View) -> None:
     view.set_read_only(True)
     if not view.name():
         view.set_name("vDiff")
-    view.set_status(STATUS_KEY, KEY_HINTS)
+    view.set_status(STATUS_KEY, key_hints(mode))
 
 
 def index_point(view: sublime.View, index: int, col: int = 0) -> int:
@@ -217,21 +287,18 @@ def caret_index(view: sublime.View) -> int:
     return view.rowcol(view.sel()[0].begin())[0] - _HEADER_ROWS
 
 
-def fingerprint(st: ViewState) -> Optional[Tuple[Optional[float], ...]]:
-    """Cheap "did anything change" key for working-tree mode: mtimes of the shown files and of the git index"""
+def fingerprint(st: ViewState) -> Optional[Tuple[Any, ...]]:
+    """Cheap "did anything change" key of a working-tree diff: mtimes of the shown files and of the git index;
+    None for a commit or nothing shown (the branches view keeps its own, see branches.fingerprint)"""
     if st.in_commit or st.change is None:
         return None
-    files = st.files if st.all_mode else [st.change]
-    index = git.index_path(st.repo)
-    return tuple(_mtime(os.path.join(st.repo, c.path)) for c in files) + (_mtime(index) if index else None,)
+    return worktree_fingerprint(st.repo, st.files if st.all_mode else [st.change])
 
 
-def _mtime(path: str) -> Optional[float]:
-    """Modification time of `path`, or None when it cannot be stat'ed"""
-    try:
-        return os.stat(path).st_mtime
-    except OSError:
-        return None
+def worktree_fingerprint(repo: str, files: Sequence[FileChange]) -> Tuple[Optional[float], ...]:
+    """mtimes of `files` and of the index they are staged in"""
+    index = git.index_path(repo)
+    return tuple(git.mtime(os.path.join(repo, c.path)) for c in files) + (git.mtime(index) if index else None,)
 
 
 def flash(view: sublime.View) -> None:
@@ -268,7 +335,7 @@ def render_message(view: sublime.View, st: ViewState, message: str) -> None:
     st.binary = False
     _replace(view, message)
     view.assign_syntax("scope:text.plain")
-    _finish(view, st, 0, 0, "vDiff")
+    _finish(view, st, MODE_DIFF, "vDiff", header_html(st, 0, 0))
 
 
 def _trim_context(lines: Sequence[Line], context: int) -> List[Line]:
@@ -348,16 +415,18 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
     # paint its colours as regions
     view.assign_syntax("scope:text.plain")
     palette.ensure(view)
-    if palette.claim_restart_notice(view):
+    if palette.claim_restart_notice(view, palette.DIFF_SCOPES):
         status(NEEDS_RESTART)
-    _all_colours(view, st, [c.path for c in st.files if c.path not in st.collapsed])
+    # the token colours only once their scheme rules are live; tokenising before the restart would be thrown away
+    resolved = palette.tokens_resolved(view)
+    if resolved:
+        _all_colours(view, st, [c.path for c in st.files if c.path not in st.collapsed])
     # per-row regions: heading counts, number prefix, tint, token colours
     starts = _row_starts_for_text(rows)
     del_regions, ins_regions, file_regions, prefix_regions = [], [], [], []
     file_del_counts, file_ins_counts, file_statuses = [], [], []
     token_groups: Dict[str, List[sublime.Region]] = {}
     default_colour = palette.foreground(view, "text.plain")
-    resolved = palette.tokens_resolved(view)
     # context colours come from a later scheme rule, so they may still await a restart
     ctx_resolved = palette.tokens_resolved(view, ("ctx",))
     for i, (change, line, section) in enumerate(metadata):
@@ -403,8 +472,7 @@ def render_all(view: sublime.View, st: ViewState, focus: Union[None, str, Tuple[
     view.add_regions(KEY_FILE_PREFIX, prefix_regions, palette.line_numbers_scope(view), flags=sublime.DRAW_NO_OUTLINE)
     for scope, regions in token_groups.items():
         view.add_regions(palette.token_key(scope), regions, scope, flags=sublime.DRAW_NO_OUTLINE)
-    insertions, deletions = _totals(st.files)
-    _finish(view, st, insertions, deletions, "⟐ all files")
+    _finish(view, st, MODE_DIFF, "⟐ all files", _all_header_html(st))
     # place the caret: on the focused change's first row, else on `heading` (a file's or the top)
     if isinstance(focus, tuple):
         heading = next((row for row, shown in zip(st.all_change_rows, st.all_change_row_targets) if shown == focus), 0)
@@ -482,6 +550,35 @@ def all_change_at(view: sublime.View, st: ViewState) -> Optional[FileChange]:
     return None
 
 
+def all_change_below(view: sublime.View, st: ViewState) -> Optional[FileChange]:
+    """File of the first heading or diff row at or below the caret: the file a blank row or the top row precedes"""
+    for change, _, _ in st.all_rows[max(0, caret_index(view)):]:
+        if change is not None:
+            return change
+    return None
+
+
+def follow_caret(view: sublime.View, st: ViewState) -> None:
+    """In the all-files view, make the file under the caret current and redraw the header for it
+
+    Only when the caret crossed into another file, and not while a render is pending: the rows then
+    describe the old text
+    """
+    if st.in_branches or not st.all_mode or st.rendered_token != st.token:
+        return
+    change = all_change_at(view, st)
+    if change is None or (st.change is not None and change.path == st.change.path):
+        return
+    st.change = change
+    _header(view, st, _all_header_html(st))
+
+
+def _all_header_html(st: ViewState) -> str:
+    """The all-files header: the totals on the summary line, the current file's own counts in the title"""
+    change = st.change
+    return header_html(st, change.insertions if change else 0, change.deletions if change else 0)
+
+
 def render(view: sublime.View, st: ViewState) -> None:
     """Draw st.lines for st.change into the view"""
     change = st.change
@@ -505,12 +602,12 @@ def render(view: sublime.View, st: ViewState) -> None:
         # here rather than init_view: during a session restore the scheme colours still read as absent
         palette.ensure(view)
         _paint_regions(view, st)
-        if palette.claim_restart_notice(view):
+        if palette.claim_restart_notice(view, palette.DIFF_SCOPES):
             status(NEEDS_RESTART)
 
     # header and bookkeeping, then the caret and scroll back to the top
     ins, dele = parse.counts(lines)
-    _finish(view, st, ins, dele, f"⟐ {os.path.basename(change.path)}")
+    _finish(view, st, MODE_DIFF, f"⟐ {os.path.basename(change.path)}", header_html(st, ins, dele))
     view.sel().clear()
     view.sel().add(sublime.Region(index_point(view, 0)))
     view.set_viewport_position((0, 0), False)
@@ -628,13 +725,21 @@ def _colour_runs(
     return runs
 
 
-def _finish(view: sublime.View, st: ViewState, ins: int, dele: int, name: str) -> None:
-    """Header, tab name, status bar and bookkeeping shared by every render"""
-    _header(view, st, ins, dele)
+def _finish(view: sublime.View, st: ViewState, mode: str, name: str, header: str, key: Callable[[ViewState], Any] = fingerprint) -> None:
+    """Mode, header, tab name, status bar and bookkeeping shared by every render: what was drawn is settled here
+
+    `key` is the mode's fingerprint, the branches view's own one there
+    """
+    st.mode = mode
+    _header(view, st, header)
     view.set_name(name)
-    view.set_status(STATUS_KEY, KEY_HINTS)
+    view.set_status(STATUS_KEY, key_hints(st.mode))
+    view.settings().set(MODE_SETTING, st.mode)
+    # the caret row's highlight; the branches view turns it off itself once it tints the caret's commit
+    view.settings().set("highlight_line", True)
     st.persist(view)
-    st.fingerprint = fingerprint(st)
+    st.fingerprint = key(st)
+    st.drawn = st.describe()
 
 
 def _replace(view: sublime.View, text: str) -> None:
@@ -696,11 +801,6 @@ def _char_regions(
     return deleted, inserted
 
 
-def _totals(files: Sequence[FileChange]) -> Tuple[int, int]:
-    """Summed numstat counts; binary files carry None counts and add nothing"""
-    return sum(c.insertions or 0 for c in files), sum(c.deletions or 0 for c in files)
-
-
 def _summary_html(st: ViewState) -> str:
     """Summary line above the title: the commit on one line, or the staged/unstaged split and totals"""
     if not st.files and not st.commit:
@@ -708,12 +808,11 @@ def _summary_html(st: ViewState) -> str:
     if st.in_commit:
         text = " · ".join(_commit_parts(st))
     else:
-        # staged means "has something staged": a partially staged file counts as staged only
-        staged = sum(1 for c in st.files if c.staged)
-        insertions, deletions = _totals(st.files)
+        # the same counts as the branches view's working-tree entry: a partially staged file is on both sides
+        stat = git.worktree_stats(st.files)
         text = (
-            f"{staged} staged, {len(st.files) - staged} unstaged"
-            f' · <span class="del">-{deletions}</span> <span class="ins">+{insertions}</span>'
+            f"{stat.staged} staged, {stat.unstaged} unstaged"
+            f' · <span class="del">-{stat.deletions}</span> <span class="ins">+{stat.insertions}</span>'
         )
     return f'<div class="summary">{text}</div>'
 
@@ -728,8 +827,10 @@ def _commit_parts(st: ViewState) -> List[str]:
         parts.append(html.escape(info.author))
         parts.append(f'<span class="when">{html.escape(info.date)}</span>')
     # binary files add nothing to the line totals but still count toward the file total
-    insertions, deletions = _totals(st.files)
-    parts.append(f"{file_count(len(st.files))} changed" f' <span class="del">-{deletions}</span> <span class="ins">+{insertions}</span>')
+    stat = git.worktree_stats(st.files)
+    parts.append(
+        f"{file_count(stat.files)} changed" f' <span class="del">-{stat.deletions}</span> <span class="ins">+{stat.insertions}</span>'
+    )
     # the subject, plus the body's first line
     if info:
         message = html.escape(info.subject)
@@ -740,8 +841,8 @@ def _commit_parts(st: ViewState) -> List[str]:
     return parts
 
 
-def header_html(st: ViewState, ins: int, dele: int) -> str:
-    """The minihtml header: the summary line, then the shown file's path, counts, state and action links"""
+def header_html(st: ViewState, ins: Optional[int], dele: Optional[int]) -> str:
+    """The minihtml header: the summary line, then the shown file's path, its counts (None for a binary file), state and action links"""
     change = st.change
     # the title: path, rename source, counts and working-tree state
     if change is None:
@@ -750,7 +851,10 @@ def header_html(st: ViewState, ins: int, dele: int) -> str:
         title = f'<span class="path">{html.escape(change.path)}</span>'
         if change.old_path:
             title += f' <span class="old">← {html.escape(change.old_path)}</span>'
-        title += f'&nbsp;&nbsp;<span class="del">-{dele}</span> <span class="ins">+{ins}</span>'
+        if ins is None or dele is None:
+            title += '&nbsp;&nbsp;<span class="state">binary</span>'
+        else:
+            title += f'&nbsp;&nbsp;<span class="del">-{dele}</span> <span class="ins">+{ins}</span>'
         if not st.in_commit:
             state = "staged" if change.staged else STATUS_NAMES.get(change.status, "")
             if state:
@@ -764,13 +868,20 @@ def header_html(st: ViewState, ins: int, dele: int) -> str:
         actions.append('<a href="discard" class="danger">Discard</a>')
     if change is not None:
         actions.append('<a href="open">Open</a>')
-    actions.append('<a href="files">Files</a>')
-    actions.append('<a href="commits">Commits</a>')
-    actions.append('<a href="help" title="keys">?</a>')
+    return header_frame(_summary_html(st), title, actions)
 
+
+def header_frame(summary: str, title: str, actions: Sequence[str]) -> str:
+    """The header's body: the summary line, then the title with `actions` and the links every view has"""
+    links = list(actions) + [
+        '<a href="files">Files</a>',
+        '<a href="commits">Commits</a>',
+        '<a href="branches">Branches</a>',
+        '<a href="help" title="keys">?</a>',
+    ]
     return (
-        f'<body id="vdiff-header"><style>{HEADER_CSS}</style>{_summary_html(st)}'
-        f'<div>{title}<span class="actions">{"".join(actions)}</span></div></body>'
+        f'<body id="vdiff-header"><style>{HEADER_CSS}</style>{summary}'
+        f'<div>{title}<span class="actions">{"".join(links)}</span></div></body>'
     )
 
 
@@ -779,25 +890,31 @@ def _run_action(view: sublime.View, href: str) -> None:
     view.run_command("vdiff_action", {"action": href})
 
 
-def _header(view: sublime.View, st: ViewState, ins: int, dele: int) -> None:
-    """One block phantom above the text; redrawn from scratch, so no PhantomSet state to keep"""
+def _header(view: sublime.View, st: ViewState, html_text: str) -> None:
+    """One block phantom above the text, redrawn from scratch unless the same one is still in place"""
+    # keyed on the buffer too: replacing the text can drop the phantom while query_phantom still answers for it
+    drawn = html_text, view.change_count()
+    if st.header == drawn:
+        return
 
     def navigate(href: str) -> None:
         """Run the clicked header link's action"""
         _run_action(view, href)
 
     view.erase_phantoms(PHANTOM_KEY)
-    view.add_phantom(PHANTOM_KEY, sublime.Region(0), header_html(st, ins, dele), sublime.LAYOUT_BLOCK, navigate)
+    view.add_phantom(PHANTOM_KEY, sublime.Region(0), html_text, sublime.LAYOUT_BLOCK, navigate)
+    st.header = drawn
 
 
 # --- key help popup ---------------------------------------------------------
 
 
 def help_html(st: ViewState) -> str:
-    """The minihtml key list; rows that need a working-tree file are dimmed while a commit is shown"""
+    """The minihtml key list of the shown mode; rows that need a working-tree file are dimmed while a commit is shown"""
     parts: List[str] = []
+    width = _key_width(st.mode)
     # per group a heading, dimmed with a note when it does not apply in a commit
-    for title, applies, group in KEY_GROUPS:
+    for title, applies, group in MODE_KEY_GROUPS[st.mode]:
         dim = st.in_commit and not applies
         heading = html.escape(title)
         if dim:
@@ -807,7 +924,7 @@ def help_html(st: ViewState) -> str:
         row_class = "dim" if dim else "row"
         # a row per key with a padded key column; a single-action row becomes a link
         for key in group:
-            pad = "&nbsp;" * (_KEY_WIDTH - len(key.keys) + 2)
+            pad = "&nbsp;" * (width - len(key.keys) + 2)
             row = f'<span class="k">{html.escape(key.keys)}</span>{pad}{html.escape(key.label)}'
             if len(key.actions) == 1 and not dim:
                 row = f'<a href="{key.actions[0]}">{row}</a>'

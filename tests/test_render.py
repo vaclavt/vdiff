@@ -159,7 +159,7 @@ def test_help_popup_lists_every_key():
     assert "next / previous change" in html and "open the real file at this line" in html
     # working-tree mode: nothing dimmed, every single-action row is a link
     assert 'class="dim"' not in html and "uncommitted only" not in html
-    assert 'href="discard"' in html and 'href="files"' in html and 'href="close"' in html
+    assert 'href="discard"' in html and 'href="files"' in html and 'href="branches"' in html and 'href="close"' in html
     # rows covering two actions stay plain text
     assert 'href="next_change"' not in html and 'href="stage"' not in html
     # the popup does not list the key that opens it
@@ -196,7 +196,7 @@ def test_help_popup_toggles_and_navigates():
 
 
 # keymap spellings that the popup shows as a symbol
-DISPLAY_KEYS = {"enter": "⏎", "escape": "esc"}
+DISPLAY_KEYS = {"enter": "⏎", "escape": "esc", "shift+enter": "shift+⏎"}
 
 
 def keymap_bindings():
@@ -205,19 +205,37 @@ def keymap_bindings():
         return json.load(f)
 
 
+def binding_mode(binding):
+    """The vdiff_mode a binding is limited to, None when it applies in every mode"""
+    modes = [c["operand"] for c in binding["context"] if c["key"] == "vdiff_mode"]
+    assert len(modes) <= 1, binding["keys"]
+    # a setting context does not compare strings; the plugin answers vdiff_mode itself
+    assert not any(c["key"] == "setting.vdiff_mode" for c in binding["context"]), binding["keys"]
+    return modes[0] if modes else None
+
+
 def test_keymap_matches_help_table():
-    """The keymap, ACTIONS and the popup agree on both the actions and the keys that reach them"""
+    """Per mode, the keymap, ACTIONS and the popup agree on both the actions and the keys that reach them"""
     bindings = keymap_bindings()
 
     assert all(b["command"] == "vdiff_action" for b in bindings)
-    bound = {b["args"]["action"] for b in bindings}
-    listed = {action for k in render.KEYS for action in k.actions}
-    # "?" opens the popup, so the popup leaves it out
-    assert bound == set(commands.ACTIONS) == listed | {"help"}
-
-    # rebinding a key without updating the table would leave the popup and status bar lying
-    bound_keys = {DISPLAY_KEYS.get(key, key) for b in bindings for key in b["keys"]}
-    assert bound_keys == {token for k in render.KEYS for token in k.keys.split() if token != "/"} | {"?"}
+    assert all({c["key"] for c in b["context"]} >= {"setting.vdiff_view"} for b in bindings)
+    assert {binding_mode(b) for b in bindings} == {None, "diff", "branches"}
+    bound_all = set()
+    for mode, table in render.MODE_KEY_GROUPS.items():
+        applicable = [b for b in bindings if binding_mode(b) in (None, mode)]
+        # one meaning per key within a mode
+        keys = [key for b in applicable for key in b["keys"]]
+        assert len(keys) == len(set(keys)), mode
+        bound = {b["args"]["action"] for b in applicable}
+        listed = {action for k in render.keys(mode) for action in k.actions}
+        # "?" opens the popup, so the popup leaves it out
+        assert bound == listed | {"help"}, mode
+        # rebinding a key without updating the table would leave the popup and status bar lying
+        bound_keys = {DISPLAY_KEYS.get(key, key) for key in keys}
+        assert bound_keys == {token for k in render.keys(mode) for token in k.keys.split() if token != "/"} | {"?"}, mode
+        bound_all |= bound
+    assert bound_all == set(commands.ACTIONS)
 
 
 def test_no_binding_yields_to_vintage_command_mode():
@@ -258,13 +276,14 @@ def test_summary_counts_staged_and_unstaged_files():
         git.FileChange("a.py", "M", True, 1, 1, None),
         git.FileChange("b.py", "M", False, 1, 1, None),
         git.FileChange("c.py", "?", False, 1, 0, None),
+        git.FileChange("d.py", "M", True, 2, 0, None, unstaged=True),  # partially staged: on both sides, as in the branches view
     ]
     render.render(view, st)
     summary = header(view).split('<div class="summary">')[1].split("</div>")[0]
 
     # the untracked file's whole content counts as insertions, the way git.changed_files records it
-    assert summary.startswith("1 staged, 2 unstaged · ")
-    assert '<span class="del">-2</span>' in summary and '<span class="ins">+3</span>' in summary
+    assert summary.startswith("2 staged, 3 unstaged · ")
+    assert '<span class="del">-2</span>' in summary and '<span class="ins">+5</span>' in summary
 
 
 def test_summary_totals_skip_binary_files_but_still_count_them():
@@ -303,6 +322,23 @@ def test_summary_totals_a_commit_and_owns_the_date():
     # and nowhere else: there is no second commit line any more
     assert html.count("abc1234") == 1 and html.count("2026-09-23 10:00") == 1
     assert 'class="commit"' not in html
+
+
+def test_the_all_files_title_shows_the_current_files_counts_not_the_totals():
+    st = state.ViewState("/repo", all_mode=True)
+    st.files = [git.FileChange("x.py", "M", False, 3, 2, None), git.FileChange("y.py", "M", True, 7, 0, None),
+                git.FileChange("logo.png", "M", False, None, None, None)]
+    st.change = st.files[1]
+    # every file's totals belong on the summary line only
+    html = render._all_header_html(st)
+    title = html.split("</div>", 1)[1]
+    assert '<span class="del">-0</span> <span class="ins">+7</span>' in title and "+10" not in title
+    assert '<span class="del">-2</span> <span class="ins">+10</span>' in html.split("</div>", 1)[0]
+    st.change = st.files[2]
+    assert '<span class="state">binary</span>' in render._all_header_html(st).split("</div>", 1)[1]
+    # file by file, the counts handed in are the shown file's own
+    st.all_mode, st.change = False, st.files[0]
+    assert '<span class="del">-4</span> <span class="ins">+5</span>' in render.header_html(st, 5, 4)
 
 
 def test_summary_is_omitted_without_a_file_list():
@@ -432,3 +468,50 @@ def test_restart_notice_when_the_override_cannot_take_effect_yet(monkeypatch):
     # said once per scheme, not once per render
     render.render(view, make_state())
     assert said == ["vDiff: " + render.NEEDS_RESTART]
+
+
+# --- the branches view's keys ----------------------------------------------
+
+
+def test_help_popup_follows_the_mode():
+    st = make_state()
+    st.mode = state.MODE_BRANCHES
+    _, html = help_popup(st)
+    for keys in ("J K", "j k", "o v", "⏎", "shift+⏎", "L", "P", "F", "d", "f", "c", "b", "r", "esc"):
+        assert f">{keys}<" in html, keys
+    assert "next / previous branch" in html and "fetch all remotes" in html
+    assert ">s / S<" not in html and ">n p<" not in html and ">v<" not in html
+    # a commit shown before switching dims nothing here: the branch keys do not depend on it
+    st.sha = "abc"
+    _, html = help_popup(st)
+    assert 'class="dim"' not in html and 'href="checkout"' in html and 'href="pull"' in html
+    # the diff popup lists the way in
+    st.mode = state.MODE_DIFF
+    _, html = help_popup(st)
+    assert ">b<" in html and 'href="branches"' in html and ">J K<" not in html
+
+
+def test_status_hints_follow_the_mode():
+    view = sublime.View()
+    render.init_view(view)
+    assert view.status[render.STATUS_KEY] == render.key_hints() and "b branches" in render.key_hints()
+    hints = render.key_hints(state.MODE_BRANCHES)
+    assert "J K branch" in hints and "L pull" in hints and "s / S" not in hints
+    render.init_view(view, state.MODE_BRANCHES)
+    assert view.status[render.STATUS_KEY] == hints and view.settings().get(state.MODE_SETTING) == "branches"
+
+
+def test_all_files_view_tokenises_only_once_the_colours_can_show(monkeypatch):
+    calls = []
+    monkeypatch.setattr(render, "_all_colours", lambda view, st, paths: calls.append(list(paths)))
+    st = make_state()
+    st.all_mode = True
+    st.files = [st.change]
+    st.all_diffs = {st.change.path: (st.lines, st.blocks, False)}
+    view = sublime.View()
+    render.init_view(view)
+    # before the restart that loads the scheme rules the colours could not be painted: no tokenising
+    render.render_all(view, st)
+    assert calls == []
+    render.render_all(with_loaded_override(view), st)
+    assert calls == [[st.change.path]]

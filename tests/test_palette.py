@@ -157,3 +157,72 @@ def test_the_status_letter_is_white_on_the_heading_unless_set(tmp_path, monkeypa
     colour_option(monkeypatch, "file_header_status_foreground", "#ffff00")
     palette.ensure(sublime.View())
     assert by_scope(tmp_path)[palette.SCOPE_FILE_STATUS]["foreground"] == "#ffff00"
+
+
+def test_red_and_green_text_rules_share_the_heading_colours_on_the_editor_background(tmp_path, monkeypatch):
+    view = sublime.View()
+    palette.ensure(view)
+    rules = by_scope(tmp_path)
+    plain = palette._nudge(palette._global_background(view))
+    assert rules[palette.SCOPE_TEXT_DEL] == {"scope": palette.SCOPE_TEXT_DEL, "background": plain,
+                                            "foreground": palette.FILE_DEL_FOREGROUND, "font_style": "bold"}
+    assert rules[palette.SCOPE_TEXT_INS]["foreground"] == palette.FILE_INS_FOREGROUND
+    colour_option(monkeypatch, "file_header_inserted_foreground", "#00ff00")
+    palette.ensure(sublime.View())
+    assert by_scope(tmp_path)[palette.SCOPE_TEXT_INS]["foreground"] == "#00ff00"
+    # until the override is live the scheme's diff tints stand in
+    assert palette.text_scope(view, "del") == palette.SCOPE_DEL
+    assert palette.text_scope(view, "ins") == palette.SCOPE_INS
+    assert palette.count_scope(view, "del") == palette.SCOPE_DEL
+    view.override_loaded = True
+    assert palette.text_scope(view, "del") == palette.SCOPE_TEXT_DEL
+    assert palette.text_scope(view, "ins") == palette.SCOPE_TEXT_INS
+    assert palette.count_scope(view, "del") == palette.SCOPE_FILE_DEL_COUNT
+    assert palette.count_scope(view, "ins") == palette.SCOPE_FILE_INS_COUNT
+
+
+def test_the_cursor_count_rules_share_the_cursor_background_and_the_heading_colours(tmp_path, monkeypatch):
+    colour_option(monkeypatch, "file_header_inserted_foreground", "#00ff00")
+    view = sublime.View()
+    palette.ensure(view)
+    rules = by_scope(tmp_path)
+    assert rules[palette.SCOPE_CURSOR_INS] == {"scope": palette.SCOPE_CURSOR_INS, "background": rules[palette.SCOPE_CURSOR]["background"],
+                                              "foreground": "#00ff00", "font_style": "bold"}
+    assert rules[palette.SCOPE_CURSOR_DEL]["foreground"] == palette.FILE_DEL_FOREGROUND
+    # the text scope stands in until the rule is live
+    assert palette.cursor_text_scope(view, "ins") == palette.SCOPE_INS
+    view.override_loaded = True
+    assert palette.cursor_text_scope(view, "ins") == palette.SCOPE_CURSOR_INS
+
+
+def test_the_restart_notice_is_claimed_per_view_kind(tmp_path):
+    view = sublime.View()
+    palette.ensure(view)
+    # nothing live yet: each kind of view asks once
+    assert palette.claim_restart_notice(view, palette.DIFF_SCOPES)
+    assert not palette.claim_restart_notice(view, palette.DIFF_SCOPES)
+    assert palette.claim_restart_notice(view, palette.BRANCH_SCOPES, tokens=False)
+    assert not palette.claim_restart_notice(view, palette.BRANCH_SCOPES, tokens=False)
+    # an upgrade that adds only the branches rules: a diff view, whose rules are live, says nothing
+    palette.reset()
+    palette.ensure(view)
+    view.override_loaded = True
+    for scope in palette.BRANCH_SCOPES[3:]:
+        view.styles[scope] = {"foreground": sublime.DEFAULT_FG}  # known to the scheme, but without a background: not live
+    assert not palette.claim_restart_notice(view, palette.DIFF_SCOPES)
+    assert palette.claim_restart_notice(view, palette.BRANCH_SCOPES, tokens=False)
+
+
+def test_the_commit_cursor_rule_uses_the_line_highlight_colour(tmp_path, monkeypatch):
+    view = sublime.View()
+    palette.ensure(view)
+    rule = by_scope(tmp_path)[palette.SCOPE_CURSOR]
+    assert rule["background"] == "#3b4350" and rule["foreground"] == sublime.DEFAULT_FG
+    assert palette.cursor_scope(view) is None
+    view.override_loaded = True
+    assert palette.cursor_scope(view) == palette.SCOPE_CURSOR
+    # a scheme without a line highlight: the background nudged towards the foreground
+    assert palette._blend("#000000", "#ffffff", 0.12) == "#1f1f1f"
+    assert palette._blend("#303841", "#d8dee9", 0.12) == "#444c55"
+    monkeypatch.setattr(sublime.View, "style", lambda self: {})
+    assert palette._line_highlight(view) == palette._blend("#000000", sublime.DEFAULT_FG, palette.CURSOR_BLEND)
